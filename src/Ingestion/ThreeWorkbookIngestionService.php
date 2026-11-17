@@ -290,6 +290,7 @@ class ThreeWorkbookIngestionService
             'faculty' => count($faculty['rows']),
             'students' => count($student['rows']),
             'finance_lines' => count($finance['rows']),
+            'financial' => count($finance['rows']),
         ];
 
         return [
@@ -340,6 +341,7 @@ class ThreeWorkbookIngestionService
                 'faculty' => count($parsed['FACULTY']['rows'] ?? []),
                 'students' => count($parsed['STUDENT']['rows'] ?? []),
                 'finance_lines' => count($parsed['FINANCE']['rows'] ?? []),
+                'financial' => count($parsed['FINANCE']['rows'] ?? []),
             ],
             'issues' => $allIssues,
             'cross_file_validation' => $crossIssues,

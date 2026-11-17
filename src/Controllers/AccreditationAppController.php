@@ -352,6 +352,7 @@ class AccreditationAppController
                 'frozen_hash' => $frozenHash,
                 'total_score' => $scoreResult['total_score'],
                 'predicted_band' => $rankPrediction['predicted_band'],
+                'confidence' => $rankPrediction['confidence_interval'] ?? $rankPrediction['confidence_percentage'] ?? '80%',
             ]);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => 'Calculation error during dataset freeze: ' . $e->getMessage()], 400);
@@ -407,6 +408,7 @@ class AccreditationAppController
             // Enrich result with presentation aliases
             $simResult['baseline_score'] = $simResult['current_score'];
             $simResult['optimized_score'] = $simResult['projected_score'];
+            $simResult['score_delta'] = round($simResult['projected_score'] - $simResult['current_score'], 2);
             $simResult['roadmap'] = [];
             foreach ($simResult['top_levers'] ?? [] as $idx => $lever) {
                 $simResult['roadmap'][] = [

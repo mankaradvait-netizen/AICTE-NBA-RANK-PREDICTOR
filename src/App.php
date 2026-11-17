@@ -189,6 +189,7 @@ class App
 
         // Screen 3: Data Input & Ingestion
         $app->get('/input', [AccreditationAppController::class, 'showDataInput']);
+        $app->get('/data-input', [AccreditationAppController::class, 'showDataInput']);
         $app->get('/api/template/excel', [AccreditationAppController::class, 'downloadTemplate']);
         $app->get('/api/template/masters', [AccreditationAppController::class, 'downloadMastersZip']);
         $app->post('/api/upload/workbooks', [AccreditationAppController::class, 'handleUploadWorkbooks']);
@@ -198,6 +199,7 @@ class App
 
         // Screen 4: Analysis, What-If Simulation, AI Strategy, and PDF
         $app->get('/analysis', [AccreditationAppController::class, 'showAnalysis']);
+        $app->get('/results', [AccreditationAppController::class, 'showAnalysis']);
         $app->post('/api/simulate', [AccreditationAppController::class, 'handleSimulate']);
         $app->post('/api/ai/strategy', [AccreditationAppController::class, 'handleAiStrategy']);
         $app->get('/report/pdf', [AccreditationAppController::class, 'downloadPdf']);
