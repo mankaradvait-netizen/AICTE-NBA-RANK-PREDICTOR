@@ -1,0 +1,77 @@
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: nirf_nginx
+    restart: always
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./public:/var/www/html/public:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+    networks:
+      - nirf_frontend_net
+      - nirf_internal_net
+    depends_on:
+      - php-fpm
+
+  php-fpm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nirf_php_fpm
+    restart: always
+    volumes:
+      - .:/var/www/html:ro
+      - nirf_storage_vol:/var/nirf/storage
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "0"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a unique 64-character hex value}
+      JWT_ISSUER: ${JWT_ISSUER:-nirf.deterministic.internal}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-nirf.api.clients}
+      JWT_EXPIRATION_SECONDS: ${JWT_EXPIRATION_SECONDS:-900}
+      MASTER_KEY_HEX: ${MASTER_KEY_HEX:?Set MASTER_KEY_HEX to a unique 64-character hex value}
+      ACTIVE_KEY_ID: ${ACTIVE_KEY_ID:?Set ACTIVE_KEY_ID}
+      CRYPTO_MODE: ${CRYPTO_MODE:-gcm}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Set CORS_ALLOWED_ORIGINS}
+      DB_FORMULA_READER_DSN: "pgsql:host=nirf_postgres;port=5432;dbname=nirf_formula_engine_db"
+      DB_FORMULA_READER_USER: ${DB_FORMULA_READER_USER:?Set DB_FORMULA_READER_USER}
+      DB_FORMULA_READER_PASSWORD: ${DB_FORMULA_READER_PASSWORD:?Set DB_FORMULA_READER_PASSWORD}
+      DB_FORMULA_ADMIN_DSN: "pgsql:host=nirf_postgres;port=5432;dbname=nirf_formula_engine_db"
+      DB_FORMULA_ADMIN_USER: ${DB_FORMULA_ADMIN_USER:?Set DB_FORMULA_ADMIN_USER}
+      DB_FORMULA_ADMIN_PASSWORD: ${DB_FORMULA_ADMIN_PASSWORD:?Set DB_FORMULA_ADMIN_PASSWORD}
+      DB_CORE_DSN: "pgsql:host=nirf_postgres;port=5432;dbname=nirf_institution_core_db"
+      DB_CORE_USER: ${DB_CORE_USER:?Set DB_CORE_USER}
+      DB_CORE_PASSWORD: ${DB_CORE_PASSWORD:?Set DB_CORE_PASSWORD}
+    networks:
+      - nirf_internal_net
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: nirf_postgres
+    restart: always
+    environment:
+      POSTGRES_MULTIPLE_DATABASES: "nirf_formula_engine_db,nirf_institution_core_db"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - nirf_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    # CRITICAL: No host ports published. Postgres is isolated inside internal network only.
+    expose:
+      - "5432"
+    networks:
+      - nirf_internal_net
+
+networks:
+  nirf_frontend_net:
+    driver: bridge
+  nirf_internal_net:
+    internal: true
+
+volumes:
+  nirf_postgres_data:
+  nirf_storage_vol:

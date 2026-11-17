@@ -1,0 +1,226 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Config\DatabaseManager;
+use App\Config\Environment;
+use App\Excel\FormulaWorkbookManager;
+use App\Excel\TemplateGenerator;
+use App\Formula\FormulaLinter;
+use App\Formula\SafeExpressionEvaluator;
+use App\Security\AuditLogger;
+use App\Security\CryptoService;
+use App\Security\PasswordPolicy;
+
+require __DIR__ . '/../vendor/autoload.php';
+
+Environment::load(__DIR__ . '/..');
+
+$argv = $_SERVER['argv'] ?? [];
+$command = $argv[1] ?? 'help';
+
+$dbManager = new DatabaseManager($_ENV);
+$evaluator = new SafeExpressionEvaluator();
+$linter = new FormulaLinter($evaluator);
+$workbookManager = new FormulaWorkbookManager($dbManager, $linter, $evaluator);
+
+$masterKey = Environment::require('MASTER_KEY_HEX');
+$keyId = Environment::require('ACTIVE_KEY_ID');
+$crypto = new CryptoService($masterKey, $keyId, (string)Environment::get('CRYPTO_MODE', 'gcm'));
+
+switch ($command) {
+    case 'migrate':
+        echo "Executing database migrations with multi-driver schema parity...\n";
+        try {
+            $runner = new App\Config\MigrationRunner($dbManager);
+            $runner->run();
+            echo " [OK] Database schema & verified seed migrated successfully.\n";
+        } catch (\Throwable $e) {
+            echo " [FAIL] Migration error: " . $e->getMessage() . "\n";
+            exit(1);
+        }
+        break;
+
+    case 'user:create-admin':
+        $email = $argv[2] ?? null;
+        $password = Environment::get('INITIAL_ADMIN_PASSWORD');
+        $role = $argv[3] ?? 'SYSTEM_ADMIN';
+
+        if (!$email || !$password) {
+            echo "Usage: bin/console user:create-admin <email> [SYSTEM_ADMIN|FORMULA_ADMIN] (INITIAL_ADMIN_PASSWORD must be securely injected)\n";
+            exit(1);
+        }
+        if (!in_array($role, ['SYSTEM_ADMIN', 'FORMULA_ADMIN'], true)) {
+            echo " [FAIL] Role must be SYSTEM_ADMIN or FORMULA_ADMIN.\n";
+            exit(1);
+        }
+        unset($_ENV['INITIAL_ADMIN_PASSWORD'], $_SERVER['INITIAL_ADMIN_PASSWORD']);
+        putenv('INITIAL_ADMIN_PASSWORD');
+
+        $corePdo = $dbManager->getInstitutionCore();
+        $hash = PasswordPolicy::hash($password);
+        $stmt = $corePdo->prepare("
+            INSERT INTO users (email, password_hash, role, must_change_password)
+            VALUES (:email, :hash, :role, FALSE)
+        ");
+        try {
+            $stmt->execute([':email' => $email, ':hash' => $hash, ':role' => $role]);
+            echo " [OK] Admin user '{$email}' created with role '{$role}'.\n";
+        } catch (\Throwable $e) {
+            echo " [FAIL] Error creating admin: " . $e->getMessage() . "\n";
+            exit(1);
+        }
+        break;
+
+    case 'formulas:make-template':
+        $out = $argv[2] ?? 'formula_master_template.xlsx';
+        TemplateGenerator::generate($out);
+        echo " [OK] Unverified development template exported to: {$out}\n";
+        break;
+
+    case 'formulas:export':
+        $setId = (int) ($argv[2] ?? 1);
+        $out = $argv[3] ?? "formula_set_{$setId}.xlsx";
+        $workbookManager->exportSetToExcel($setId, $out);
+        echo " [OK] Formula set {$setId} exported to: {$out}\n";
+        break;
+
+    case 'benchmarks:ingest-top100':
+        $file = $argv[2] ?? null;
+        $year = $argv[3] ?? '2026-2027';
+        $category = $argv[4] ?? 'ENGINEERING';
+        $sourceReference = trim((string) ($argv[5] ?? ''));
+        $setId = isset($argv[6]) ? (int)$argv[6] : null;
+
+        if (!$file || !file_exists($file) || $sourceReference === '') {
+            echo "Usage: bin/console benchmarks:ingest-top100 <file.xlsx> <academic_year> <category> <https-source-url> [setId]\n";
+            exit(1);
+        }
+
+        // Parse raw cohort sheet
+        $reader = new \PhpOffice\PhpSpreadsheet\Reader\Xlsx();
+        $spreadsheet = $reader->load($file);
+        $sheet = $spreadsheet->getSheetByName('Top100_Raw_Data') ?? $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+        if (count($rows) !== 101) {
+            echo " [FAIL] Cohort workbook must contain a header and exactly 100 data rows.\n";
+            exit(1);
+        }
+        $headers = $rows[0];
+        $cohort = [];
+        for ($i = 1; $i < count($rows); $i++) {
+            $item = [];
+            foreach ($headers as $idx => $h) {
+                if (!empty($h)) $item[trim((string)$h)] = $rows[$i][$idx];
+            }
+            $cohort[] = $item;
+        }
+
+        if ($setId === null) {
+            $stmt = $dbManager->getFormulaReader()->prepare("SELECT id FROM formula_sets WHERE category = :cat AND academic_year = :year AND status = 'VALIDATED' ORDER BY version DESC LIMIT 1");
+            $stmt->execute([':cat' => $category, ':year' => $year]);
+            $setId = (int) $stmt->fetchColumn();
+        }
+
+        if ($setId <= 0) {
+            echo " [FAIL] No VALIDATED formula set found for {$category} {$year}.\n";
+            exit(1);
+        }
+
+        $workbookManager->ingestTop100($setId, $cohort, $sourceReference);
+        echo " [OK] Ingested 100-row benchmarks for formula set {$setId} ({$category} {$year}) with source reference.\n";
+        break;
+
+    case 'keys:rotate':
+        $newKeyId = $argv[2] ?? '';
+        $newMasterKeyHex = Environment::require('ROTATION_MASTER_KEY_HEX');
+        unset($_ENV['ROTATION_MASTER_KEY_HEX'], $_SERVER['ROTATION_MASTER_KEY_HEX']);
+        putenv('ROTATION_MASTER_KEY_HEX');
+        if (!preg_match('/^[A-Za-z0-9._-]{1,64}$/', $newKeyId) || strlen($newMasterKeyHex) !== 64 || !ctype_xdigit($newMasterKeyHex)) {
+            echo "Usage: bin/console keys:rotate <new-key-id> (ROTATION_MASTER_KEY_HEX must be securely injected)\n";
+            exit(1);
+        }
+        if ($newKeyId === $keyId) {
+            echo " [FAIL] New key ID must differ from ACTIVE_KEY_ID.\n";
+            exit(1);
+        }
+
+        $corePdo = $dbManager->getInstitutionCoreMigration();
+        if ($corePdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'pgsql') {
+            echo " [FAIL] Key rotation requires PostgreSQL to guarantee transactional table locking.\n";
+            exit(1);
+        }
+
+        try {
+            $corePdo->beginTransaction();
+            $corePdo->exec('LOCK TABLE institution_submissions IN EXCLUSIVE MODE');
+            $stmt = $corePdo->query(
+                'SELECT id, encrypted_raw_metrics, key_id FROM institution_submissions FOR UPDATE'
+            );
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo "Re-wrapping " . count($rows) . " submission data encryption keys...\n";
+
+            $update = $corePdo->prepare("
+                UPDATE institution_submissions
+                SET encrypted_raw_metrics = :payload, key_id = :new_key_id
+                WHERE id = :id AND key_id = :old_key_id
+            ");
+            foreach ($rows as $row) {
+                if ((string) $row['key_id'] !== $keyId) {
+                    throw new RuntimeException(
+                        "Submission {$row['id']} uses an unexpected key ID; no rows were rotated."
+                    );
+                }
+                $rewrappedPayload = $crypto->rewrapEncryptedPayload(
+                    (string) $row['encrypted_raw_metrics'],
+                    $newMasterKeyHex
+                );
+                $update->execute([
+                    ':payload' => $rewrappedPayload,
+                    ':new_key_id' => $newKeyId,
+                    ':id' => $row['id'],
+                    ':old_key_id' => $keyId,
+                ]);
+                if ($update->rowCount() !== 1) {
+                    throw new RuntimeException(
+                        "Submission {$row['id']} changed during key rotation; no rows were committed."
+                    );
+                }
+            }
+
+            $corePdo->commit();
+            echo " [OK] Rewrapped " . count($rows) . " submission keys. Configure MASTER_KEY_HEX and ACTIVE_KEY_ID={$newKeyId} before resuming writes.\n";
+        } catch (\Throwable $e) {
+            if ($corePdo->inTransaction()) {
+                $corePdo->rollBack();
+            }
+            echo " [FAIL] Key rotation rolled back: {$e->getMessage()}\n";
+            exit(1);
+        }
+        break;
+
+    case 'audit:verify-chain':
+        echo "Verifying security audit log cryptographic hash chain...\n";
+        $corePdo = $dbManager->getInstitutionCore();
+        $result = AuditLogger::verifyChain($corePdo);
+        if ($result['valid']) {
+            echo " [OK] Cryptographic hash chain verified intact across {$result['checked_count']} audit records.\n";
+        } else {
+            echo " [FAIL] Security Alert: Audit chain broken at Row #{$result['broken_row_id']}!\n";
+            echo " Error: {$result['error']}\n";
+            exit(1);
+        }
+        break;
+
+    default:
+        echo "NIRF Deterministic Platform CLI\n";
+        echo "Commands:\n";
+        echo "  migrate                             - Run SQL schema migrations on both DBs\n";
+        echo "  user:create-admin <email> [role]     - Create initial admin (INITIAL_ADMIN_PASSWORD required)\n";
+        echo "  formulas:make-template [out.xlsx]   - Generate unverified development workbook\n";
+        echo "  formulas:export <setId> [out.xlsx]  - Export formula set to Excel\n";
+        echo "  benchmarks:ingest-top100 <file> ... - Ingest 100-row cohort with HTTPS source\n";
+        echo "  keys:rotate <new-key-id>             - Rotate envelope master key (ROTATION_MASTER_KEY_HEX required)\n";
+        echo "  audit:verify-chain                  - Verify cryptographic audit chain\n";
+        break;
+}

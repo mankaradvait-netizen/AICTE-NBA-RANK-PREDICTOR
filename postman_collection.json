@@ -1,0 +1,145 @@
+{
+  "info": {
+    "name": "NIRF Deterministic Platform API",
+    "description": "Postman Collection for NIRF Deterministic Backend Platform",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "submissionId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01. System Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "02. Auth - Login",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/auth/login",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@nirf.gov.in\",\n  \"password\": \"SecureAdminP@ss2026!\"\n}"
+        }
+      }
+    },
+    {
+      "name": "03. Auth - Verify TOTP MFA",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/auth/mfa/verify",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"temp_token\": \"{{tempToken}}\",\n  \"code\": \"123456\"\n}"
+        }
+      }
+    },
+    {
+      "name": "04. Inputs Schema - Dynamic Form Definition",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/inputs/schema?category=ENGINEERING&year=2026-2027"
+      }
+    },
+    {
+      "name": "05. Submissions - Create Draft",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/submissions",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"category\": \"ENGINEERING\",\n  \"academic_year\": \"2026-2027\",\n  \"current_rank_band\": \"UNRANKED\",\n  \"target_rank_band\": \"TOP_300\",\n  \"raw_metrics\": {\n    \"NT\": 1200,\n    \"NE\": 1000\n  }\n}"
+        }
+      }
+    },
+    {
+      "name": "06. Submissions - Update Draft (Optimistic Lock)",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/submissions/{{submissionId}}",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"row_version\": 1,\n  \"raw_metrics\": {\n    \"NT\": 1200,\n    \"NE\": 1000,\n    \"NP\": 50,\n    \"F\": 60,\n    \"F_PHD\": 20,\n    \"F1\": 30,\n    \"F2\": 20,\n    \"F3\": 10,\n    \"BC\": 15000,\n    \"BO\": 40000,\n    \"P\": 60,\n    \"CC\": 300,\n    \"TOP25\": 15,\n    \"PG\": 1,\n    \"PP\": 5,\n    \"RF\": 100000,\n    \"CF\": 20000,\n    \"NP_pct\": 65,\n    \"NHS_pct\": 10,\n    \"NG_pct\": 70,\n    \"GMS_val\": 350000,\n    \"NPHD\": 10,\n    \"N_state_pct\": 10,\n    \"N_country_pct\": 0,\n    \"SW_pct\": 25,\n    \"FW_pct\": 15,\n    \"ESC_pct\": 10,\n    \"PCS_score\": 12,\n    \"PR_survey_val\": 15\n  }\n}"
+        }
+      }
+    },
+    {
+      "name": "07. Submissions - Finalize & Submit (Score & Optimize)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/submissions/{{submissionId}}/submit",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ]
+      }
+    },
+    {
+      "name": "08. Submissions - Get Results Scorecard",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/submissions/{{submissionId}}/results",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ]
+      }
+    },
+    {
+      "name": "09. Submissions - Export Excel Scorecard",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/submissions/{{submissionId}}/export.xlsx",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ]
+      }
+    },
+    {
+      "name": "10. Admin Formulas - List Sets",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/admin/formulas",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ]
+      }
+    },
+    {
+      "name": "11. Admin Formulas - Download Template",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/admin/formulas/template",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ]
+      }
+    }
+  ]
+}

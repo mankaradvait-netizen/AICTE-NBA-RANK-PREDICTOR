@@ -1,0 +1,21 @@
+Faculty Name,Faculty ID,Gender,Strt of teaching Date ,DOB,Sallery (yearly),Designation ,PWD,Publication passed,Publications Failed,Earnings from Publications,Earnings from counselling,Citations passed,Citations Failed,Education Level,"Type Of Faculty (Full time, Contract FOR 2 SEM, Visiting and etc)",Country ,State
+Dr. Rajesh Sharma,FAC101,Male,2008-07-15,1975-04-12,2400000,Professor,No,18,2,750000,350000,240,15,Ph.D,Full time,India,Maharashtra
+Dr. Priya Nair,FAC102,Female,2012-08-01,1982-11-20,1850000,Associate Professor,No,12,1,450000,200000,165,8,Ph.D,Full time,India,Kerala
+Dr. Amit Patel,FAC103,Male,2015-01-10,1985-06-18,1400000,Associate Professor,No,9,3,250000,120000,98,12,Ph.D,Full time,India,Gujarat
+Prof. Sunita Deshmukh,FAC104,Female,2019-07-22,1990-09-05,1050000,Assistant Professor,No,5,1,100000,50000,42,4,Ph.D,Full time,India,Maharashtra
+Dr. Vikram Singh,FAC105,Male,2005-09-10,1971-02-14,2600000,Professor,No,22,4,900000,450000,310,25,Ph.D,Full time,India,Rajasthan
+Prof. Ananya Roy,FAC106,Female,2021-06-15,1993-12-08,850000,Assistant Professor,No,3,2,50000,25000,18,6,M.Tech,Full time,India,West Bengal
+Dr. Mohammed Al-Mansoor,FAC107,Male,2014-03-01,1980-08-25,1950000,Associate Professor,No,11,1,400000,180000,145,10,Ph.D,Full time,UAE,Dubai
+Prof. Rohan Kulkarni,FAC108,Male,2022-08-01,1995-03-30,750000,Assistant Professor,No,2,1,0,0,12,2,M.Tech,Full time,India,Maharashtra
+Dr. Sneha Reddy,FAC109,Female,2016-11-15,1986-07-19,1350000,Assistant Professor,No,8,2,300000,150000,85,9,Ph.D,Full time,India,Telangana
+Prof. Karthik Venkatesh,FAC110,Male,2020-01-05,1992-05-14,920000,Assistant Professor,Yes,4,0,120000,40000,34,3,M.E.,Full time,India,Karnataka
+Dr. David Johnson,FAC111,Male,2011-04-18,1978-10-02,2200000,Professor,No,15,3,600000,280000,210,18,Ph.D,Full time,USA,California
+Dr. Kavita Joshi,FAC112,Female,2018-07-01,1988-01-22,1150000,Assistant Professor,No,6,1,180000,80000,55,5,Ph.D,Full time,India,Maharashtra
+Prof. Harish Kumar,FAC113,Male,2023-01-16,1996-09-11,700000,Assistant Professor,No,1,1,0,0,6,1,M.Tech,Full time,India,Haryana
+Dr. Meera Iyer,FAC114,Female,2007-06-20,1973-12-15,2500000,Professor,No,20,2,850000,400000,280,14,Ph.D,Full time,India,Tamil Nadu
+Prof. Suresh Babu,FAC115,Male,2024-07-01,1997-04-05,650000,Assistant Professor,No,1,0,0,0,4,0,M.Tech,Full time,India,Andhra Pradesh
+Prof. Jean Dupont,FAC116,Male,2022-09-01,1984-06-12,1200000,Visiting Faculty,No,4,1,150000,50000,35,4,Ph.D,Visiting,France,Paris
+Prof. Neha Gupta,FAC117,Female,2023-08-15,1994-11-28,680000,Lecturer,No,1,2,0,0,5,2,M.Tech,Contract FOR 2 SEM,India,Uttar Pradesh
+Dr. Balaji Sundaram,FAC118,Male,2013-10-10,1981-03-17,1650000,Associate Professor,No,10,2,350000,160000,125,11,Ph.D,Full time,India,Tamil Nadu
+Dr. Shweta Choudhury,FAC119,Female,2017-02-01,1987-08-09,1280000,Assistant Professor,No,7,1,220000,90000,68,7,Ph.D,Full time,India,Assam
+Dr. Arvind Verma,FAC120,Male,2006-03-25,1974-05-30,2450000,Professor,No,19,3,800000,380000,265,19,Ph.D,Full time,India,Delhi

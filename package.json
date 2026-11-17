@@ -1,0 +1,13 @@
+{
+  "name": "nirf-deterministic-backend",
+  "version": "1.0.0",
+  "description": "NIRF Deterministic Analysis & Rank Optimization Platform Backend",
+  "scripts": {
+    "dev": "php -S 0.0.0.0:8000 -t public public/index.php",
+    "start": "php -S 0.0.0.0:8000 -t public public/index.php",
+    "serve": "php -S 0.0.0.0:8000 -t public public/index.php",
+    "test": "php vendor/bin/phpunit",
+    "analyse": "php -d memory_limit=1G vendor/bin/phpstan analyse --memory-limit=1G",
+    "migrate": "php bin/console migrate"
+  }
+}

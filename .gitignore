@@ -1,0 +1,16 @@
+/vendor/
+.env
+.env.*
+!.env.example
+.phpunit.cache/
+/var/
+*.sqlite
+composer.phar
+composer.cmd
+php.cmd
+*.log
+__pycache__/
+*.pyc
+test-results
+.DS_Store
+Thumbs.db
