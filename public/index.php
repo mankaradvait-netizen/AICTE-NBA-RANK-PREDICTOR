@@ -10,6 +10,10 @@ if (php_sapi_name() === 'cli-server') {
     }
 }
 
+// Suppress inline HTML warnings leaking into API responses while logging errors
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
 use App\App;
 use App\Config\Environment;
 

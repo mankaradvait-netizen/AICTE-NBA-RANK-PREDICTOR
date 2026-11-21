@@ -1988,15 +1988,25 @@ HTML;
     btn.disabled = true;
     btn.innerText = 'Extracting & Parsing Documents...';
 
-    const form = document.getElementById('workbook-upload-form');
-    const formData = new FormData(form);
-
-    // If universal files were selected, attach them
+    // Construct FormData cleanly without duplicate entries or empty file parts
+    const formData = new FormData();
     const univInput = document.getElementById('universal_files');
-    if (univInput && univInput.files.length > 0) {
+    if (univInput && univInput.files && univInput.files.length > 0) {
       for (let i = 0; i < univInput.files.length; i++) {
         formData.append('files[]', univInput.files[i]);
       }
+    }
+    const facultyInput = document.getElementById('faculty_file');
+    if (facultyInput && facultyInput.files && facultyInput.files.length > 0) {
+      formData.append('faculty_file', facultyInput.files[0]);
+    }
+    const studentInput = document.getElementById('student_file');
+    if (studentInput && studentInput.files && studentInput.files.length > 0) {
+      formData.append('student_file', studentInput.files[0]);
+    }
+    const financeInput = document.getElementById('finance_file');
+    if (financeInput && financeInput.files && financeInput.files.length > 0) {
+      formData.append('finance_file', financeInput.files[0]);
     }
 
     try {
@@ -2004,7 +2014,19 @@ HTML;
         method: 'POST',
         body: formData
       });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (jsonErr) {
+        // Strip any unexpected HTML/warning tags if present
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          data = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error('Server returned non-JSON response: ' + rawText.replace(/<[^>]*>/g, ' ').substring(0, 150));
+        }
+      }
       if (res.ok && data.success) {
         renderMastersResults(data);
       } else {
