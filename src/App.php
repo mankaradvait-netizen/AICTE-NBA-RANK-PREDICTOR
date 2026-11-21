@@ -23,6 +23,7 @@ use App\Formula\FormulaLinter;
 use App\Formula\SafeExpressionEvaluator;
 use App\Ingestion\KpiMapper;
 use App\Ingestion\ThreeWorkbookIngestionService;
+use App\Ingestion\UniversalDocumentIngestionService;
 use App\Report\PdfReportService;
 use App\Security\AuthMiddleware;
 use App\Security\CryptoService;
@@ -100,6 +101,9 @@ class App
             ThreeWorkbookIngestionService::class => function () {
                 return new ThreeWorkbookIngestionService();
             },
+            UniversalDocumentIngestionService::class => function () {
+                return new UniversalDocumentIngestionService();
+            },
             KpiMapper::class => function () {
                 return new KpiMapper();
             },
@@ -124,7 +128,8 @@ class App
                     $c->get(KpiMapper::class),
                     $c->get(RankPredictor::class),
                     $c->get(AiStrategyService::class),
-                    $c->get(PdfReportService::class)
+                    $c->get(PdfReportService::class),
+                    $c->get(UniversalDocumentIngestionService::class)
                 );
             },
         ]);
@@ -177,9 +182,10 @@ class App
         });
 
         // 4. Exactly 4 Screens (In Order) & Supporting Endpoints
-        // Screen 1: Sign In
+        // Screen 1: Sign In & Registration
         $app->get('/', [AccreditationAppController::class, 'showSignIn']);
         $app->post('/api/signin', [AccreditationAppController::class, 'handleSignIn']);
+        $app->post('/api/register', [AccreditationAppController::class, 'handleRegister']);
         $app->post('/api/signout', [AccreditationAppController::class, 'handleSignOut']);
         $app->get('/api/signout', [AccreditationAppController::class, 'handleSignOut']);
 
