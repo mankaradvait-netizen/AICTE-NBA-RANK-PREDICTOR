@@ -45,6 +45,9 @@ class SecurityMiddleware implements MiddlewareInterface
 
         // Login, MFA, and file uploads are throttled more strictly than general API traffic.
         $maxRequests = match ($path) {
+            '/api/signin' => 10,
+            '/api/register' => 10,
+            '/api/upload/workbooks' => 10,
             '/api/v1/auth/login' => 10,
             '/api/v1/auth/mfa/verify' => 5,
             '/api/v1/admin/formulas/upload' => 10,
