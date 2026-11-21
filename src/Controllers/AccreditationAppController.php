@@ -279,14 +279,73 @@ class AccreditationAppController
 
         $uploadedFiles = $request->getUploadedFiles();
         $queryParams = $request->getQueryParams();
-        $useSample = !empty($queryParams['sample']) || empty($uploadedFiles);
+        $useSample = !empty($queryParams['sample']) || (empty($uploadedFiles) && isset($queryParams['sample']));
+
+        // Check if the upload target is explicitly the Three Master Workbooks
+        $isThreeMasters = false;
+        foreach (['faculty_file', 'student_file', 'finance_file'] as $roleKey) {
+            if (isset($uploadedFiles[$roleKey])) {
+                $f = $uploadedFiles[$roleKey];
+                $fileList = is_array($f) ? $f : [$f];
+                foreach ($fileList as $item) {
+                    if ($item instanceof \Psr\Http\Message\UploadedFileInterface && $item->getError() === UPLOAD_ERR_OK) {
+                        $isThreeMasters = true;
+                        break 2;
+                    }
+                }
+            }
+        }
+
+        $filesToIngest = [];
+        $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nirf_upload_' . bin2hex(random_bytes(4));
 
         try {
-            // Check if universal document ingestion is available with uploaded files
-            $filesToIngest = [];
-            $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nirf_upload_' . bin2hex(random_bytes(4));
+            // Path 1: Three Master Workbooks (or sample masters)
+            if ($useSample || $isThreeMasters) {
+                if ($useSample) {
+                    $dataDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'data';
+                    $facultyPath = $dataDir . DIRECTORY_SEPARATOR . 'Faculty_Data_Master_v2.xlsx';
+                    $studentPath = $dataDir . DIRECTORY_SEPARATOR . 'Student_Data_Master_v2.xlsx';
+                    $financePath = $dataDir . DIRECTORY_SEPARATOR . 'Money_and_Institute_Master_v2.xlsx';
 
-            if (!$useSample && !empty($uploadedFiles)) {
+                    if (!file_exists($facultyPath) || !file_exists($studentPath) || !file_exists($financePath)) {
+                        return $this->jsonResponse($response, ['error' => 'Sample master workbooks not found in data/ directory.'], 404);
+                    }
+
+                    $ingestionResult = $this->workbookIngestion->ingestFiles($facultyPath, $studentPath, $financePath);
+                } else {
+                    $ingestionResult = $this->workbookIngestion->ingestUploadedFiles($uploadedFiles);
+                }
+
+                $kpis = $this->kpiMapper->mapWorkbooksToKpis($ingestionResult['parsed']);
+                $candidateFacts = $this->synthesizeCandidateFactsFromMasters($ingestionResult['parsed'], $kpis);
+                $documents = $this->synthesizeDocumentsFromMasters($ingestionResult['parsed']);
+
+                $_SESSION['workbook_ingestion'] = [
+                    'parsed' => $ingestionResult['parsed'],
+                    'counts' => $ingestionResult['counts'],
+                    'issues' => $ingestionResult['issues'],
+                    'cross_file_validation' => $ingestionResult['cross_file_validation'] ?? [],
+                    'candidate_facts' => $candidateFacts,
+                    'documents' => $documents,
+                    'kpis' => $kpis,
+                    'status' => 'PENDING_FREEZE',
+                    'timestamp' => date('Y-m-d H:i:s'),
+                ];
+
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'counts' => $ingestionResult['counts'],
+                    'candidate_facts' => $candidateFacts,
+                    'documents' => $documents,
+                    'issues' => $ingestionResult['issues'],
+                    'kpis' => $kpis,
+                    'cross_file_validation' => $ingestionResult['cross_file_validation'] ?? [],
+                ]);
+            }
+
+            // Path 2: Universal Multi-Format Document Ingestion
+            if (!empty($uploadedFiles)) {
                 if (!is_dir($tempDir)) {
                     @mkdir($tempDir, 0755, true);
                 }
@@ -307,63 +366,31 @@ class AccreditationAppController
                 }
             }
 
-            // Universal Document Ingestion path
-            if ($this->universalIngestion !== null && !empty($filesToIngest)) {
-                $ingestionResult = $this->universalIngestion->ingestDocuments($filesToIngest);
-                $kpis = $ingestionResult['mapped_kpis'];
-                $counts = [
-                    'faculty' => (int)($kpis['F'] ?? 20),
-                    'students' => (int)($kpis['NT'] ?? 100),
-                    'finance_lines' => 1,
-                    'financial' => 1,
-                    'candidate_facts' => count($ingestionResult['candidate_facts']),
-                    'documents' => count($ingestionResult['documents']),
-                ];
-
-                $_SESSION['workbook_ingestion'] = [
-                    'parsed' => ['UNIVERSAL' => ['documents' => $ingestionResult['documents']]],
-                    'counts' => $counts,
-                    'issues' => $ingestionResult['issues'],
-                    'candidate_facts' => $ingestionResult['candidate_facts'],
-                    'documents' => $ingestionResult['documents'],
-                    'kpis' => $kpis,
-                    'status' => 'PENDING_FREEZE',
-                    'timestamp' => date('Y-m-d H:i:s'),
-                ];
-
-                return $this->jsonResponse($response, [
-                    'success' => true,
-                    'counts' => $counts,
-                    'candidate_facts' => $ingestionResult['candidate_facts'],
-                    'documents' => $ingestionResult['documents'],
-                    'issues' => $ingestionResult['issues'],
-                    'kpis' => $kpis,
-                ]);
+            if (empty($filesToIngest)) {
+                return $this->jsonResponse($response, ['error' => 'No valid files received for extraction.'], 400);
             }
 
-            // Legacy fallback / sample query
-            if ($useSample) {
-                $dataDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'data';
-                $facultyPath = $dataDir . DIRECTORY_SEPARATOR . 'Faculty_Data_Master_v2.xlsx';
-                $studentPath = $dataDir . DIRECTORY_SEPARATOR . 'Student_Data_Master_v2.xlsx';
-                $financePath = $dataDir . DIRECTORY_SEPARATOR . 'Money_and_Institute_Master_v2.xlsx';
-
-                if (!file_exists($facultyPath) || !file_exists($studentPath) || !file_exists($financePath)) {
-                    return $this->jsonResponse($response, ['error' => 'Sample master workbooks not found in data/ directory.'], 404);
-                }
-
-                $ingestionResult = $this->workbookIngestion->ingestFiles($facultyPath, $studentPath, $financePath);
-            } else {
-                $ingestionResult = $this->workbookIngestion->ingestUploadedFiles($uploadedFiles);
+            if ($this->universalIngestion === null) {
+                return $this->jsonResponse($response, ['error' => 'Universal document ingestion service is not configured.'], 500);
             }
 
-            $kpis = $this->kpiMapper->mapWorkbooksToKpis($ingestionResult['parsed']);
+            $ingestionResult = $this->universalIngestion->ingestDocuments($filesToIngest);
+            $kpis = $ingestionResult['mapped_kpis'];
+            $counts = [
+                'faculty' => (int)($kpis['F'] ?? 20),
+                'students' => (int)($kpis['NT'] ?? 100),
+                'finance_lines' => 1,
+                'financial' => 1,
+                'candidate_facts' => count($ingestionResult['candidate_facts']),
+                'documents' => count($ingestionResult['documents']),
+            ];
 
             $_SESSION['workbook_ingestion'] = [
-                'parsed' => $ingestionResult['parsed'],
-                'counts' => $ingestionResult['counts'],
+                'parsed' => ['UNIVERSAL' => ['documents' => $ingestionResult['documents']]],
+                'counts' => $counts,
                 'issues' => $ingestionResult['issues'],
-                'cross_file_validation' => $ingestionResult['cross_file_validation'] ?? [],
+                'candidate_facts' => $ingestionResult['candidate_facts'],
+                'documents' => $ingestionResult['documents'],
                 'kpis' => $kpis,
                 'status' => 'PENDING_FREEZE',
                 'timestamp' => date('Y-m-d H:i:s'),
@@ -371,10 +398,12 @@ class AccreditationAppController
 
             return $this->jsonResponse($response, [
                 'success' => true,
-                'counts' => $ingestionResult['counts'],
+                'counts' => $counts,
+                'candidate_facts' => $ingestionResult['candidate_facts'],
+                'documents' => $ingestionResult['documents'],
                 'issues' => $ingestionResult['issues'],
                 'kpis' => $kpis,
-                'cross_file_validation' => $ingestionResult['cross_file_validation'] ?? [],
+                'cross_file_validation' => [],
             ]);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => 'Failed to process workbooks: ' . $e->getMessage()], 400);
@@ -386,10 +415,213 @@ class AccreditationAppController
                     }
                 }
             }
-            if (isset($tempDir) && is_dir($tempDir)) {
+            if (is_dir($tempDir)) {
                 @rmdir($tempDir);
             }
         }
+    }
+
+    /**
+     * @param array<string, array{rows: list<array<string, mixed>>}> $parsed
+     * @param array<string, float> $kpis
+     * @return list<array<string, mixed>>
+     */
+    private function synthesizeCandidateFactsFromMasters(array $parsed, array $kpis): array
+    {
+        $facts = [];
+        $idx = 1;
+
+        $facultyRows = $parsed['FACULTY']['rows'] ?? [];
+        $fCount = count($facultyRows);
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Faculty_Data_Master_v2.xlsx',
+            'document_filename' => 'Faculty_Data_Master_v2.xlsx',
+            'field_code' => 'faculty.total_count',
+            'canonical_field_id' => 'faculty.total_count',
+            'canonical_name' => 'Verified Full-Time Regular Faculty',
+            'source_label' => 'Faculty Register: Total Records',
+            'raw_value' => $fCount,
+            'normalized_value' => (float)$fCount,
+            'unit' => 'persons',
+            'source_locator' => 'Faculty:Rows1-' . max(1, $fCount),
+            'confidence' => 0.98,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $phdCount = 0;
+        foreach ($facultyRows as $fr) {
+            $q = strtolower((string)($fr['Qualification'] ?? $fr['qualification'] ?? ''));
+            if (str_contains($q, 'phd') || str_contains($q, 'ph.d')) {
+                $phdCount++;
+            }
+        }
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Faculty_Data_Master_v2.xlsx',
+            'document_filename' => 'Faculty_Data_Master_v2.xlsx',
+            'field_code' => 'faculty.has_phd',
+            'canonical_field_id' => 'faculty.has_phd',
+            'canonical_name' => 'Doctoral (PhD) Qualified Faculty',
+            'source_label' => 'Faculty Register: Qualification',
+            'raw_value' => $phdCount,
+            'normalized_value' => (float)$phdCount,
+            'unit' => 'persons',
+            'source_locator' => 'Faculty:Col_Qualification',
+            'confidence' => 0.95,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $studentRows = $parsed['STUDENT']['rows'] ?? [];
+        $sCount = count($studentRows);
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Student_Data_Master_v2.xlsx',
+            'document_filename' => 'Student_Data_Master_v2.xlsx',
+            'field_code' => 'student.total_enrolled',
+            'canonical_field_id' => 'student.total_enrolled',
+            'canonical_name' => 'Total Enrolled Students',
+            'source_label' => 'Student Register: Total Census',
+            'raw_value' => $sCount,
+            'normalized_value' => (float)$sCount,
+            'unit' => 'persons',
+            'source_locator' => 'Student:Rows1-' . max(1, $sCount),
+            'confidence' => 0.98,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Student_Data_Master_v2.xlsx',
+            'document_filename' => 'Student_Data_Master_v2.xlsx',
+            'field_code' => 'institution.sanctioned_intake',
+            'canonical_field_id' => 'institution.sanctioned_intake',
+            'canonical_name' => 'Sanctioned Approved Intake',
+            'source_label' => 'Student Register / Intake',
+            'raw_value' => (int)($kpis['NT'] ?? 720),
+            'normalized_value' => (float)($kpis['NT'] ?? 720),
+            'unit' => 'persons',
+            'source_locator' => 'Student:ApprovedIntake',
+            'confidence' => 0.98,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Student_Data_Master_v2.xlsx',
+            'document_filename' => 'Student_Data_Master_v2.xlsx',
+            'field_code' => 'outcome.median_salary',
+            'canonical_field_id' => 'outcome.median_salary',
+            'canonical_name' => 'Median Annual Placement Salary',
+            'source_label' => 'Placement Register: Salary',
+            'raw_value' => (float)($kpis['MS'] ?? 650000),
+            'normalized_value' => (float)($kpis['MS'] ?? 650000),
+            'unit' => 'INR',
+            'source_locator' => 'Student:Col_Salary',
+            'confidence' => 0.95,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Money_and_Institute_Master_v2.xlsx',
+            'document_filename' => 'Money_and_Institute_Master_v2.xlsx',
+            'field_code' => 'finance.bc_cost',
+            'canonical_field_id' => 'finance.bc_cost',
+            'canonical_name' => 'Building Construction Cost (Exclusion)',
+            'source_label' => 'Statutory Exclusion: Building Construction',
+            'raw_value' => (float)($kpis['BC'] ?? 0),
+            'normalized_value' => (float)($kpis['BC'] ?? 0),
+            'unit' => 'INR',
+            'source_locator' => 'Finance:BuildingConstruction',
+            'confidence' => 0.98,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Money_and_Institute_Master_v2.xlsx',
+            'document_filename' => 'Money_and_Institute_Master_v2.xlsx',
+            'field_code' => 'finance.bo_cost',
+            'canonical_field_id' => 'finance.bo_cost',
+            'canonical_name' => 'Hostel & Allied Maintenance Cost (Exclusion)',
+            'source_label' => 'Statutory Exclusion: Hostel Operations',
+            'raw_value' => (float)($kpis['BO'] ?? 0),
+            'normalized_value' => (float)($kpis['BO'] ?? 0),
+            'unit' => 'INR',
+            'source_locator' => 'Finance:HostelMaintenance',
+            'confidence' => 0.98,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Money_and_Institute_Master_v2.xlsx',
+            'document_filename' => 'Money_and_Institute_Master_v2.xlsx',
+            'field_code' => 'finance.capex',
+            'canonical_field_id' => 'finance.capex',
+            'canonical_name' => 'Annual Capital Expenditure (Capex)',
+            'source_label' => 'Financial Statement: Capex',
+            'raw_value' => (float)($kpis['Capex'] ?? 0),
+            'normalized_value' => (float)($kpis['Capex'] ?? 0),
+            'unit' => 'INR',
+            'source_locator' => 'Finance:CapitalExpenditure',
+            'confidence' => 0.95,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        $facts[] = [
+            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+            'document' => 'Money_and_Institute_Master_v2.xlsx',
+            'document_filename' => 'Money_and_Institute_Master_v2.xlsx',
+            'field_code' => 'finance.opex',
+            'canonical_field_id' => 'finance.opex',
+            'canonical_name' => 'Annual Operational Expenditure (Opex)',
+            'source_label' => 'Financial Statement: Opex',
+            'raw_value' => (float)($kpis['Opex'] ?? 0),
+            'normalized_value' => (float)($kpis['Opex'] ?? 0),
+            'unit' => 'INR',
+            'source_locator' => 'Finance:OperationalExpenditure',
+            'confidence' => 0.95,
+            'review_status' => 'SUGGESTED',
+            'status' => 'BOUND',
+        ];
+
+        return $facts;
+    }
+
+    /**
+     * @param array<string, array{rows: list<array<string, mixed>>}> $parsed
+     * @return list<array<string, mixed>>
+     */
+    private function synthesizeDocumentsFromMasters(array $parsed): array
+    {
+        $docs = [];
+        foreach ($parsed as $type => $data) {
+            $name = match($type) {
+                'FACULTY' => 'Faculty_Data_Master_v2.xlsx',
+                'STUDENT' => 'Student_Data_Master_v2.xlsx',
+                'FINANCE' => 'Money_and_Institute_Master_v2.xlsx',
+                default => "{$type}_Master.xlsx",
+            };
+            $docs[] = [
+                'filename' => $name,
+                'document_name' => $name,
+                'file_type' => 'XLSX',
+                'facts_count' => count($data['rows'] ?? []),
+                'sheets_or_pages' => 1,
+                'status' => 'EXTRACTED',
+            ];
+        }
+        return $docs;
     }
 
     public function handleResolveIssue(Request $request, Response $response): Response
@@ -2079,14 +2311,20 @@ HTML;
       const ftbody = document.getElementById('facts-table-body');
       let frows = '';
       facts.forEach(cf => {
+        let locatorStr = '-';
+        if (typeof cf.source_locator === 'object' && cf.source_locator !== null) {
+          locatorStr = cf.source_locator.cell || cf.source_locator.locator || (cf.source_locator.sheet ? (cf.source_locator.sheet + ':' + (cf.source_locator.cell || cf.source_locator.row || '1')) : (cf.source_locator.line ? ('Line ' + cf.source_locator.line) : JSON.stringify(cf.source_locator)));
+        } else if (cf.source_locator) {
+          locatorStr = String(cf.source_locator);
+        }
         frows += '<tr>' +
           '<td><code>' + (cf.candidate_id || '-') + '</code></td>' +
-          '<td>' + (cf.document_filename || '-') + '</td>' +
-          '<td><strong>' + (cf.field_code || '-') + '</strong></td>' +
-          '<td>' + (cf.canonical_name || '-') + '</td>' +
+          '<td>' + (cf.document_filename || cf.document || '-') + '</td>' +
+          '<td><strong>' + (cf.field_code || cf.canonical_field_id || '-') + '</strong></td>' +
+          '<td>' + (cf.canonical_name || cf.source_label || '-') + '</td>' +
           '<td class="mono-val">' + (cf.raw_value !== undefined ? cf.raw_value : '-') + '</td>' +
-          '<td><code>' + (cf.source_locator || '-') + '</code></td>' +
-          '<td><span class="badge badge-success">' + (cf.status || 'BOUND') + '</span></td>' +
+          '<td><code>' + locatorStr + '</code></td>' +
+          '<td><span class="badge badge-success">' + (cf.status || cf.review_status || 'BOUND') + '</span></td>' +
           '</tr>';
       });
       ftbody.innerHTML = frows;

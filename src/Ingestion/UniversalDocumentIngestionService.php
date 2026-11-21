@@ -124,7 +124,7 @@ class UniversalDocumentIngestionService
     }
 
     /**
-     * Parses .xlsx or .xls files
+     * Parses .xlsx or .xls files using fast memory-safe array extraction.
      * @return array{facts: list<array<string, mixed>>, issues: list<array<string, mixed>>, sheets_or_pages: int}
      */
     private function parseSpreadsheet(string $filePath, string $docName, int $startIndex): array
@@ -139,90 +139,134 @@ class UniversalDocumentIngestionService
             $spreadsheet = $reader->load($filePath);
             $sheetCount = $spreadsheet->getSheetCount();
 
+            $sheetsData = [];
             foreach ($spreadsheet->getAllSheets() as $sheet) {
                 $sheetName = $sheet->getTitle();
-                $highestRow = min($sheet->getHighestRow(), 10000);
-                $highestCol = $sheet->getHighestColumn();
-                $highestColIndex = Coordinate::columnIndexFromString($highestCol);
+                $sheetsData[$sheetName] = $sheet->toArray(null, true, false, false);
+            }
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
 
-                // Read header row (row 1 or 2)
-                $headers = [];
-                for ($col = 1; $col <= $highestColIndex; $col++) {
-                    $cellVal = (string) $sheet->getCell([$col, 1])->getValue();
-                    if ($cellVal === '' && $highestRow >= 2) {
-                        $cellVal = (string) $sheet->getCell([$col, 2])->getValue();
-                    }
-                    $headers[$col] = trim($cellVal);
+            foreach ($sheetsData as $sheetName => $rawData) {
+                if (empty($rawData)) {
+                    continue;
                 }
 
-                // If sheet has summary cells like "Faculty count: 24"
-                for ($row = 1; $row <= min($highestRow, 50); $row++) {
-                    for ($col = 1; $col <= min($highestColIndex, 10); $col++) {
-                        $val = $sheet->getCell([$col, $row])->getValue();
+                $totalRows = count($rawData);
+
+                // Detect header row (first row with >= 2 non-empty cells)
+                $headerRowIdx = 0;
+                for ($r = 0; $r < min(5, $totalRows); $r++) {
+                    $nonEmpty = array_filter($rawData[$r], fn($c) => $c !== null && trim((string)$c) !== '');
+                    if (count($nonEmpty) >= 2) {
+                        $headerRowIdx = $r;
+                        break;
+                    }
+                }
+
+                $rawHeaders = $rawData[$headerRowIdx] ?? [];
+                $headers = [];
+                $canonicalByCol = [];
+                foreach ($rawHeaders as $colIdx => $val) {
+                    $h = trim((string)$val);
+                    if ($h !== '') {
+                        $headers[$colIdx] = $h;
+                        $canonicalByCol[$colIdx] = CanonicalFieldCatalog::matchField($h);
+                    }
+                }
+
+                // 1. Scan summary key-value cells (e.g. "Sanctioned Intake: 720")
+                for ($r = 0; $r < min(30, $totalRows); $r++) {
+                    foreach ($rawData[$r] as $colIdx => $val) {
                         $strVal = trim((string)$val);
                         if (preg_match('/^([A-Za-z\s]+)[:\-=\t]\s*([\d,]+(?:\.\d+)?)/', $strVal, $m)) {
                             $canonical = CanonicalFieldCatalog::matchField($m[1]);
-                            $cellCoord = Coordinate::stringFromColumnIndex($col) . $row;
+                            $colLetter = Coordinate::stringFromColumnIndex($colIdx + 1);
+                            $cleanVal = (float) str_replace(',', '', $m[2]);
+                            $meta = $canonical ? CanonicalFieldCatalog::get($canonical) : null;
                             $facts[] = [
                                 'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
                                 'document' => $docName,
+                                'document_filename' => $docName,
+                                'field_code' => $canonical ?? 'UNMAPPED',
                                 'canonical_field_id' => $canonical,
+                                'canonical_name' => $meta['description'] ?? ($meta['name'] ?? trim($m[1])),
                                 'source_label' => trim($m[1]),
-                                'raw_value' => (float) str_replace(',', '', $m[2]),
-                                'normalized_value' => (float) str_replace(',', '', $m[2]),
+                                'raw_value' => $cleanVal,
+                                'normalized_value' => $cleanVal,
                                 'unit' => 'numeric',
                                 'source_locator' => [
                                     'source_type' => 'XLSX',
                                     'sheet' => $sheetName,
-                                    'row' => $row,
-                                    'column' => Coordinate::stringFromColumnIndex($col),
-                                    'cell' => $cellCoord,
+                                    'row' => $r + 1,
+                                    'column' => $colLetter,
+                                    'cell' => $colLetter . ($r + 1),
                                 ],
                                 'confidence' => $canonical ? 0.95 : 0.50,
                                 'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
+                                'status' => 'BOUND',
                             ];
                         }
                     }
                 }
 
-                // Map row-by-row columns
-                $startDataRow = 2;
-                if (!empty($headers[1]) && str_starts_with(strtolower($headers[1]), 'indicator')) {
-                    $startDataRow = 2;
-                }
+                // 2. Scan data rows up to 150 facts per sheet
+                $factCountForSheet = 0;
+                $maxFactsPerSheet = 150;
 
-                for ($row = $startDataRow; $row <= $highestRow; $row++) {
-                    for ($col = 1; $col <= $highestColIndex; $col++) {
-                        $header = $headers[$col] ?? '';
-                        if ($header === '') continue;
+                for ($r = $headerRowIdx + 1; $r < $totalRows; $r++) {
+                    if ($factCountForSheet >= $maxFactsPerSheet) {
+                        break;
+                    }
+                    $row = $rawData[$r];
+                    if (empty(array_filter($row, fn($c) => $c !== null && trim((string)$c) !== ''))) {
+                        continue;
+                    }
 
-                        $rawVal = $sheet->getCell([$col, $row])->getValue();
-                        if ($rawVal === null || $rawVal === '') continue;
-
-                        $canonical = CanonicalFieldCatalog::matchField($header);
-                        $cellCoord = Coordinate::stringFromColumnIndex($col) . $row;
-                        $cleanVal = $this->cleanValue($rawVal);
-
-                        if ($cleanVal !== null) {
-                            $facts[] = [
-                                'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
-                                'document' => $docName,
-                                'canonical_field_id' => $canonical,
-                                'source_label' => $header,
-                                'raw_value' => $rawVal,
-                                'normalized_value' => $cleanVal,
-                                'unit' => is_numeric($cleanVal) ? 'numeric' : 'text',
-                                'source_locator' => [
-                                    'source_type' => 'XLSX',
-                                    'sheet' => $sheetName,
-                                    'row' => $row,
-                                    'column' => Coordinate::stringFromColumnIndex($col),
-                                    'cell' => $cellCoord,
-                                ],
-                                'confidence' => $canonical ? 0.90 : 0.40,
-                                'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
-                            ];
+                    foreach ($headers as $colIdx => $header) {
+                        $rawVal = $row[$colIdx] ?? null;
+                        if ($rawVal === null || trim((string)$rawVal) === '') {
+                            continue;
                         }
+
+                        $canonical = $canonicalByCol[$colIdx] ?? null;
+                        if ($canonical === null && $factCountForSheet > 20) {
+                            continue;
+                        }
+
+                        $cleanVal = $this->cleanValue($rawVal);
+                        if ($cleanVal === null) {
+                            continue;
+                        }
+
+                        $colLetter = Coordinate::stringFromColumnIndex($colIdx + 1);
+                        $cellCoord = $colLetter . ($r + 1);
+                        $meta = $canonical ? CanonicalFieldCatalog::get($canonical) : null;
+                        $cName = $meta['description'] ?? ($meta['name'] ?? $header);
+
+                        $facts[] = [
+                            'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+                            'document' => $docName,
+                            'document_filename' => $docName,
+                            'field_code' => $canonical ?? 'UNMAPPED',
+                            'canonical_field_id' => $canonical,
+                            'canonical_name' => $cName,
+                            'source_label' => $header,
+                            'raw_value' => $rawVal,
+                            'normalized_value' => $cleanVal,
+                            'unit' => is_numeric($cleanVal) ? 'numeric' : 'text',
+                            'source_locator' => [
+                                'source_type' => 'XLSX',
+                                'sheet' => $sheetName,
+                                'row' => $r + 1,
+                                'column' => $colLetter,
+                                'cell' => $cellCoord,
+                            ],
+                            'confidence' => $canonical ? 0.90 : 0.40,
+                            'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
+                            'status' => 'BOUND',
+                        ];
+                        $factCountForSheet++;
                     }
                 }
             }
@@ -272,36 +316,67 @@ class UniversalDocumentIngestionService
             $delimiter = "\t";
         }
 
-        $headers = fgetcsv($handle, 0, $delimiter) ?: [];
+        $rawHeaders = fgetcsv($handle, 0, $delimiter) ?: [];
+        $headers = [];
+        $canonicalByCol = [];
+        foreach ($rawHeaders as $colIdx => $val) {
+            $h = trim((string)$val);
+            if ($h !== '') {
+                $headers[$colIdx] = $h;
+                $canonicalByCol[$colIdx] = CanonicalFieldCatalog::matchField($h);
+            }
+        }
+
         $lineNum = 1;
+        $factCount = 0;
+        $maxCsvFacts = 150;
 
         while (($row = fgetcsv($handle, 0, $delimiter)) !== false) {
             $lineNum++;
-            foreach ($row as $colIdx => $rawVal) {
-                $header = trim($headers[$colIdx] ?? "Col_{$colIdx}");
-                if ($header === '' || $rawVal === null || trim($rawVal) === '') continue;
+            if ($factCount >= $maxCsvFacts) {
+                break;
+            }
 
-                $canonical = CanonicalFieldCatalog::matchField($header);
-                $cleanVal = $this->cleanValue($rawVal);
-
-                if ($cleanVal !== null) {
-                    $facts[] = [
-                        'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
-                        'document' => $docName,
-                        'canonical_field_id' => $canonical,
-                        'source_label' => $header,
-                        'raw_value' => $rawVal,
-                        'normalized_value' => $cleanVal,
-                        'unit' => is_numeric($cleanVal) ? 'numeric' : 'text',
-                        'source_locator' => [
-                            'source_type' => 'CSV',
-                            'line' => $lineNum,
-                            'column' => $header,
-                        ],
-                        'confidence' => $canonical ? 0.90 : 0.40,
-                        'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
-                    ];
+            foreach ($headers as $colIdx => $header) {
+                $rawVal = $row[$colIdx] ?? null;
+                if ($rawVal === null || trim((string)$rawVal) === '') {
+                    continue;
                 }
+
+                $canonical = $canonicalByCol[$colIdx] ?? null;
+                if ($canonical === null && $factCount > 20) {
+                    continue;
+                }
+
+                $cleanVal = $this->cleanValue($rawVal);
+                if ($cleanVal === null) {
+                    continue;
+                }
+
+                $meta = $canonical ? CanonicalFieldCatalog::get($canonical) : null;
+                $cName = $meta['description'] ?? ($meta['name'] ?? $header);
+
+                $facts[] = [
+                    'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
+                    'document' => $docName,
+                    'document_filename' => $docName,
+                    'field_code' => $canonical ?? 'UNMAPPED',
+                    'canonical_field_id' => $canonical,
+                    'canonical_name' => $cName,
+                    'source_label' => $header,
+                    'raw_value' => $rawVal,
+                    'normalized_value' => $cleanVal,
+                    'unit' => is_numeric($cleanVal) ? 'numeric' : 'text',
+                    'source_locator' => [
+                        'source_type' => 'CSV',
+                        'line' => $lineNum,
+                        'column' => $header,
+                    ],
+                    'confidence' => $canonical ? 0.90 : 0.40,
+                    'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
+                    'status' => 'BOUND',
+                ];
+                $factCount++;
             }
         }
         fclose($handle);
@@ -333,10 +408,14 @@ class UniversalDocumentIngestionService
                     foreach ($p['candidates'] ?? [] as $cand) {
                         $label = $cand['raw_label'] ?? '';
                         $canonical = CanonicalFieldCatalog::matchField($label);
+                        $meta = $canonical ? CanonicalFieldCatalog::get($canonical) : null;
                         $facts[] = [
                             'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
                             'document' => $docName,
+                            'document_filename' => $docName,
+                            'field_code' => $canonical ?? 'UNMAPPED',
                             'canonical_field_id' => $canonical,
+                            'canonical_name' => $meta['description'] ?? ($meta['name'] ?? $label),
                             'source_label' => $label,
                             'raw_value' => $cand['raw_value'] ?? 0,
                             'normalized_value' => $cand['raw_value'] ?? 0,
@@ -348,6 +427,7 @@ class UniversalDocumentIngestionService
                             ],
                             'confidence' => $canonical ? 0.88 : 0.50,
                             'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
+                            'status' => 'BOUND',
                         ];
                     }
                 }
@@ -363,10 +443,14 @@ class UniversalDocumentIngestionService
                 $label = trim($m[1]);
                 $canonical = CanonicalFieldCatalog::matchField($label);
                 $val = (float) str_replace(',', '', $m[2]);
+                $meta = $canonical ? CanonicalFieldCatalog::get($canonical) : null;
                 $facts[] = [
                     'candidate_id' => 'cand-' . str_pad((string)$idx++, 3, '0', STR_PAD_LEFT),
                     'document' => $docName,
+                    'document_filename' => $docName,
+                    'field_code' => $canonical ?? 'UNMAPPED',
                     'canonical_field_id' => $canonical,
+                    'canonical_name' => $meta['description'] ?? ($meta['name'] ?? $label),
                     'source_label' => $label,
                     'raw_value' => $val,
                     'normalized_value' => $val,
@@ -374,6 +458,7 @@ class UniversalDocumentIngestionService
                     'source_locator' => ['source_type' => 'PDF', 'page' => 1, 'locator' => 'Text Area'],
                     'confidence' => $canonical ? 0.75 : 0.30,
                     'review_status' => $canonical ? 'SUGGESTED' : 'UNMAPPED',
+                    'status' => 'BOUND',
                 ];
             }
         }
@@ -475,8 +560,12 @@ class UniversalDocumentIngestionService
 
             if ($fieldId === 'faculty.total_count' && is_numeric($val) && (float)$val > 0) {
                 $facultyCount = (int)$val;
-            } elseif ($fieldId === 'faculty.has_phd' && ($val === true || $val === 'Yes' || $val === 'PhD')) {
-                $phdCount++;
+            } elseif ($fieldId === 'faculty.has_phd') {
+                if (is_numeric($val) && (float)$val > 0) {
+                    $phdCount = max($phdCount, (int)$val);
+                } elseif ($val === true || $val === 'Yes' || $val === 'PhD') {
+                    $phdCount++;
+                }
             } elseif ($fieldId === 'outcome.placed_count' && is_numeric($val) && (float)$val > 0) {
                 $placedCount = (int)$val;
             } elseif ($fieldId === 'student.total_enrolled' && is_numeric($val) && (float)$val > 0) {
@@ -491,6 +580,22 @@ class UniversalDocumentIngestionService
                 $kpis['PCS_score'] = min(20.0, (float)$val);
             } elseif ($fieldId === 'perception.peer_score' && is_numeric($val)) {
                 $kpis['PR_score'] = min(100.0, (float)$val);
+            } elseif ($fieldId === 'finance.capex' && is_numeric($val) && (float)$val > 0) {
+                $kpis['Capex'] = (float)$val;
+            } elseif ($fieldId === 'finance.opex' && is_numeric($val) && (float)$val > 0) {
+                $kpis['Opex'] = (float)$val;
+            } elseif ($fieldId === 'finance.bc_cost' && is_numeric($val) && (float)$val > 0) {
+                $kpis['BC'] = (float)$val;
+            } elseif ($fieldId === 'finance.bo_cost' && is_numeric($val) && (float)$val > 0) {
+                $kpis['BO'] = (float)$val;
+            } elseif ($fieldId === 'institution.sanctioned_intake' && is_numeric($val) && (float)$val > 0) {
+                $kpis['NT'] = (float)$val;
+                $kpis['NE'] = (float)$val;
+                $kpis['N_stud'] = (float)$val;
+            } elseif ($fieldId === 'diversity.women_percentage' && is_numeric($val)) {
+                $kpis['WD_women'] = min(100.0, (float)$val);
+            } elseif ($fieldId === 'diversity.outside_state_percentage' && is_numeric($val)) {
+                $kpis['RD_outside_state'] = min(100.0, (float)$val);
             }
         }
 

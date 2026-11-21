@@ -309,23 +309,32 @@ class ThreeWorkbookIngestionService
         $parsed = [];
         $allIssues = [];
 
-        foreach ($uploadedFiles as $key => $file) {
-            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface || $file->getError() !== UPLOAD_ERR_OK) {
-                continue;
-            }
+        foreach ($uploadedFiles as $key => $fileOrList) {
+            $fileList = is_array($fileOrList) ? $fileOrList : [$fileOrList];
+            foreach ($fileList as $file) {
+                if (!$file instanceof \Psr\Http\Message\UploadedFileInterface || $file->getError() !== UPLOAD_ERR_OK) {
+                    continue;
+                }
 
-            $clientFilename = $file->getClientFilename() ?? 'upload.xlsx';
-            $ext = pathinfo($clientFilename, PATHINFO_EXTENSION);
-            $tmpPath = tempnam(sys_get_temp_dir(), 'wb_') . '.' . $ext;
-            $file->moveTo($tmpPath);
+                $clientFilename = $file->getClientFilename() ?? 'upload.xlsx';
+                $ext = pathinfo($clientFilename, PATHINFO_EXTENSION);
+                $tmpPath = tempnam(sys_get_temp_dir(), 'wb_') . '.' . $ext;
+                $file->moveTo($tmpPath);
 
-            try {
-                $cleaned = $this->parseAndCleanFile($tmpPath);
-                $type = $cleaned['file_type'];
-                $parsed[$type] = $cleaned;
-                $allIssues = array_merge($allIssues, $cleaned['issues']);
-            } finally {
-                @unlink($tmpPath);
+                try {
+                    $explicitType = match ($key) {
+                        'faculty_file' => 'FACULTY',
+                        'student_file' => 'STUDENT',
+                        'finance_file' => 'FINANCE',
+                        default => null,
+                    };
+                    $cleaned = $this->parseAndCleanFile($tmpPath, $explicitType);
+                    $type = $cleaned['file_type'];
+                    $parsed[$type] = $cleaned;
+                    $allIssues = array_merge($allIssues, $cleaned['issues']);
+                } finally {
+                    @unlink($tmpPath);
+                }
             }
         }
 
