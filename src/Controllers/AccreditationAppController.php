@@ -143,6 +143,13 @@ class AccreditationAppController
             return $this->jsonResponse($response, ['error' => 'An account with this email address already exists.'], 409);
         }
 
+        // Check if institution code already exists
+        $stmtCode = $pdo->prepare('SELECT id FROM institutions WHERE institution_code = :code LIMIT 1');
+        $stmtCode->execute([':code' => $code]);
+        if ($stmtCode->fetch()) {
+            return $this->jsonResponse($response, ['error' => 'An institution with this AISHE/NIRF code is already registered.'], 409);
+        }
+
         $instId = 'inst_' . bin2hex(random_bytes(6));
         $userId = 'usr_' . bin2hex(random_bytes(6));
 
@@ -371,6 +378,17 @@ class AccreditationAppController
             ]);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => 'Failed to process workbooks: ' . $e->getMessage()], 400);
+        } finally {
+            if (!empty($filesToIngest)) {
+                foreach ($filesToIngest as $f) {
+                    if (file_exists($f['path'])) {
+                        @unlink($f['path']);
+                    }
+                }
+            }
+            if (isset($tempDir) && is_dir($tempDir)) {
+                @rmdir($tempDir);
+            }
         }
     }
 
