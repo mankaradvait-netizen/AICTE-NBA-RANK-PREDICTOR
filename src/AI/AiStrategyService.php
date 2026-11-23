@@ -70,10 +70,16 @@ class AiStrategyService
         $topLevers = $gapAnalysis['top_levers'] ?? [];
 
         // Build authorized numerical pool for Number-Guard audit
+        $expectedRank = (int)($rankPrediction['expected_rank'] ?? 0);
+        $calibratedInterval = (string)($rankPrediction['calibrated_interval'] ?? $predictedBand);
+        $percentileLabel = (string)($rankPrediction['national_percentile_label'] ?? '');
+        $nationalBenchmarks = $rankPrediction['national_benchmarks'] ?? \App\Engine\RankPredictor::NATIONAL_BENCHMARKS;
+
         $authorizedPool = [
             'total_score' => $totalScore,
             'predicted_min' => (float)($rankPrediction['estimated_rank_min'] ?? 101),
             'predicted_max' => (float)($rankPrediction['estimated_rank_max'] ?? 150),
+            'expected_rank' => (float)($expectedRank > 0 ? $expectedRank : 101),
             'sensitivity' => (float)($rankPrediction['marginal_rank_sensitivity'] ?? 4.5),
             'gap_to_next' => (float)($rankPrediction['score_gap_to_next_tier'] ?? 2.5),
             'weight_tlr' => 30.0,
@@ -82,6 +88,14 @@ class AiStrategyService
             'weight_go' => 20.0,
             'weight_oi' => 10.0,
             'weight_pr' => 10.0,
+            'national_pool' => 1140.0,
+            'bm_tlr' => (float)($nationalBenchmarks['TLR_median'] ?? 61.40),
+            'bm_rpc' => (float)($nationalBenchmarks['RPC_median'] ?? 32.80),
+            'bm_go' => (float)($nationalBenchmarks['GO_median'] ?? 68.50),
+            'bm_oi' => (float)($nationalBenchmarks['OI_median'] ?? 56.20),
+            'bm_pr' => (float)($nationalBenchmarks['PR_median'] ?? 18.50),
+            'bm_fru' => (float)($nationalBenchmarks['fru_per_student_inr'] ?? 67165.0),
+            'bm_phd' => (float)($nationalBenchmarks['faculty_phd_pct'] ?? 68.5),
         ];
 
         if (preg_match_all('/\d+(?:\.\d+)?/', $predictedBand, $mBand)) {
@@ -264,6 +278,10 @@ class AiStrategyService
             'strategy_mode' => $mode,
             'overall_score' => $totalScore,
             'predicted_rank_band' => $predictedBand,
+            'expected_rank' => $expectedRank,
+            'calibrated_interval' => $calibratedInterval,
+            'national_percentile_label' => $percentileLabel,
+            'national_benchmarks' => $nationalBenchmarks,
             'confidence' => $confPct,
             'api_provider' => $isGeminiConfigured ? 'Google Gemini (Multimodal)' : 'Deterministic Rules Engine (Local)',
             'api_configured' => $isGeminiConfigured,

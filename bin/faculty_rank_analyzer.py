@@ -439,10 +439,10 @@ def export_ranked_csv(members: List[FacultyMember], output_path: str):
 
 def main():
     parser = argparse.ArgumentParser(description="AICTE / NBA / NIRF Faculty Data Processor and Rank Analyzer")
-    parser.add_argument('--file', '-f', type=str, default='data/sample_faculty_data.csv', help="Path to Faculty CSV file")
+    parser.add_argument('--file', '-f', type=str, default='data/Faculty_Data_Master_v2.csv', help="Path to Faculty CSV file")
     parser.add_argument('--sort', '-s', type=str, default='score', choices=['score', 'pubs', 'citations', 'earnings', 'experience', 'salary', 'name'], help="Sort faculty by metric")
     parser.add_argument('--order', '-o', type=str, default='desc', choices=['asc', 'desc'], help="Sort order")
-    parser.add_argument('--export', '-e', type=str, default='data/faculty_ranked_leaderboard.csv', help="Export sorted leaderboard to CSV")
+    parser.add_argument('--export', '-e', type=str, default=None, help="Export sorted leaderboard to CSV")
     parser.add_argument('--json', '-j', action='store_true', help="Output results in JSON format")
 
     args = parser.parse_args()

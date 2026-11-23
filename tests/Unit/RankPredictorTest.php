@@ -34,6 +34,17 @@ class RankPredictorTest extends TestCase
         $this->assertGreaterThan(0.0, $res['marginal_rank_sensitivity']);
         $this->assertEquals(59.0, $res['target_score_next_tier']);
         $this->assertEquals(4.8, $res['score_gap_to_next_tier']);
+
+        // 10-Year Empirical Calibrated Metrics
+        $this->assertGreaterThanOrEqual(51, $res['expected_rank']);
+        $this->assertLessThanOrEqual(100, $res['expected_rank']);
+        $this->assertStringStartsWith('Rank ', $res['calibrated_interval']);
+        $this->assertGreaterThan(0.0, $res['national_percentile']);
+        $this->assertLessThan(100.0, $res['national_percentile']);
+        $this->assertStringContainsString('Nationally', $res['national_percentile_label']);
+        $this->assertEquals(59.42, $res['inflation_adjusted_target']);
+        $this->assertArrayHasKey('TLR_median', $res['national_benchmarks']);
+        $this->assertArrayHasKey('fru_per_student_inr', $res['national_benchmarks']);
     }
 
     public function testPredictFoundationTier(): void

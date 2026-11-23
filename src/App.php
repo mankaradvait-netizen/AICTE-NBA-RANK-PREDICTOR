@@ -181,7 +181,7 @@ class App
             return $response->withHeader('Content-Type', 'application/json');
         });
 
-        // 4. Exactly 4 Screens (In Order) & Supporting Endpoints
+        // 4. Exactly 3 Screens (In Order) & Supporting Endpoints
         // Screen 1: Sign In & Registration
         $app->get('/', [AccreditationAppController::class, 'showSignIn']);
         $app->post('/api/signin', [AccreditationAppController::class, 'handleSignIn']);
@@ -189,21 +189,18 @@ class App
         $app->post('/api/signout', [AccreditationAppController::class, 'handleSignOut']);
         $app->get('/api/signout', [AccreditationAppController::class, 'handleSignOut']);
 
-        // Screen 2: Landing Page
-        $app->get('/landing', [AccreditationAppController::class, 'showLanding']);
-        $app->get('/demo', [AccreditationAppController::class, 'showLanding']);
-
-        // Screen 3: Data Input & Ingestion
+        // Screen 2: Data Input & Ingestion
         $app->get('/input', [AccreditationAppController::class, 'showDataInput']);
         $app->get('/data-input', [AccreditationAppController::class, 'showDataInput']);
         $app->get('/api/template/excel', [AccreditationAppController::class, 'downloadTemplate']);
         $app->get('/api/template/masters', [AccreditationAppController::class, 'downloadMastersZip']);
         $app->post('/api/upload/workbooks', [AccreditationAppController::class, 'handleUploadWorkbooks']);
         $app->post('/api/issues/resolve', [AccreditationAppController::class, 'handleResolveIssue']);
+        $app->post('/api/issues/resolve-all', [AccreditationAppController::class, 'handleResolveAllIssues']);
         $app->post('/api/dataset/freeze', [AccreditationAppController::class, 'handleDatasetFreeze']);
         $app->post('/api/analyse', [AccreditationAppController::class, 'handleAnalyse']);
 
-        // Screen 4: Analysis, What-If Simulation, AI Strategy, and PDF
+        // Screen 3: Analysis, What-If Simulation, AI Strategy, and PDF
         $app->get('/analysis', [AccreditationAppController::class, 'showAnalysis']);
         $app->get('/results', [AccreditationAppController::class, 'showAnalysis']);
         $app->post('/api/simulate', [AccreditationAppController::class, 'handleSimulate']);

@@ -223,7 +223,7 @@ class WebAndSecurityTest extends TestCase
 
     public function testProtectedScreensRedirectUnauthenticatedUsersToSignIn(): void
     {
-        $screens = ['/landing', '/input', '/analysis', '/report/pdf'];
+        $screens = ['/input', '/analysis', '/report/pdf'];
 
         foreach ($screens as $screen) {
             $req = (new ServerRequestFactory())->createServerRequest('GET', $screen);
@@ -264,7 +264,7 @@ class WebAndSecurityTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
         $body = (array) json_decode((string) $resp->getBody(), true);
         $this->assertTrue($body['success']);
-        $this->assertSame('/landing', $body['redirect']);
+        $this->assertSame('/input', $body['redirect']);
 
         $cookieHeader = $resp->getHeaderLine('Set-Cookie');
         $this->assertStringContainsString('nirf_session=', $cookieHeader);
@@ -275,7 +275,7 @@ class WebAndSecurityTest extends TestCase
         return $matches[1] ?? '';
     }
 
-    public function testScreen2LandingLoadsWithSession(): void
+    public function testPage2LandingIsRemoved(): void
     {
         $sessionId = $this->testSignInWithValidCredentialsSucceedsAndSetsCookie();
 
@@ -283,18 +283,14 @@ class WebAndSecurityTest extends TestCase
             ->withCookieParams(['nirf_session' => $sessionId]);
         $resp = $this->app->handle($req);
 
-        $this->assertSame(200, $resp->getStatusCode());
-        $body = (string) $resp->getBody();
-        $this->assertStringContainsString('<title>Institutional Ranking Analysis</title>', $body);
-        $this->assertStringContainsString('Continue', $body);
-        $this->assertStringContainsString('id="demo-fsr"', $body);
+        $this->assertSame(404, $resp->getStatusCode());
     }
 
-    public function testScreen3DataInputLoadsAndTemplateDownloadWorks(): void
+    public function testScreen2DataInputLoadsAndTemplateDownloadWorks(): void
     {
         $sessionId = $this->testSignInWithValidCredentialsSucceedsAndSetsCookie();
 
-        // 1. Data Input Screen
+        // 1. Data Input Screen (Screen 2)
         $req = (new ServerRequestFactory())->createServerRequest('GET', '/input')
             ->withCookieParams(['nirf_session' => $sessionId]);
         $resp = $this->app->handle($req);
@@ -302,9 +298,12 @@ class WebAndSecurityTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
         $body = (string) $resp->getBody();
         $this->assertStringContainsString('<title>Data Input</title>', $body);
-        $this->assertStringContainsString('Upload Excel', $body);
-        $this->assertStringContainsString('Download Excel Template', $body);
+        $this->assertStringContainsString('Autonomous Scan & Ingest Institutional Files', $body);
+        $this->assertStringContainsString('Universal Document Ingestion', $body);
         $this->assertStringContainsString('Analyse', $body);
+        $this->assertStringContainsString('1. Authentication', $body);
+        $this->assertStringContainsString('2. Data Input & Ingestion', $body);
+        $this->assertStringContainsString('3. Institutional Analysis & Strategy', $body);
 
         // 2. Excel Template Download
         $tplReq = (new ServerRequestFactory())->createServerRequest('GET', '/api/template/excel')
@@ -316,7 +315,7 @@ class WebAndSecurityTest extends TestCase
         $this->assertGreaterThan(1000, strlen((string) $tplResp->getBody()));
     }
 
-    public function testScreen4AnalyseAndPdfReport(): void
+    public function testScreen3AnalyseAndPdfReport(): void
     {
         $sessionId = $this->testSignInWithValidCredentialsSucceedsAndSetsCookie();
 
@@ -418,6 +417,21 @@ class WebAndSecurityTest extends TestCase
             $resolveData = (array) json_decode((string) $resolveResp->getBody(), true);
             $this->assertTrue($resolveData['success']);
             $this->assertSame('RESOLVED', $resolveData['issues'][0]['status']);
+
+            // Test Auto-Resolve All
+            $resolveAllReq = (new ServerRequestFactory())->createServerRequest('POST', '/api/issues/resolve-all')
+                ->withCookieParams(['nirf_session' => $sessionId])
+                ->withHeader('Content-Type', 'application/json')
+                ->withBody((new StreamFactory())->createStream(json_encode([
+                    'note' => 'Auto-verified by IQAC'
+                ], JSON_THROW_ON_ERROR)));
+            $resolveAllResp = $this->app->handle($resolveAllReq);
+            $this->assertSame(200, $resolveAllResp->getStatusCode());
+            $resolveAllData = (array) json_decode((string) $resolveAllResp->getBody(), true);
+            $this->assertTrue($resolveAllData['success']);
+            foreach ($resolveAllData['issues'] as $iss) {
+                $this->assertSame('RESOLVED', $iss['status']);
+            }
         }
 
         // 3. Freeze Dataset

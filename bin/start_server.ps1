@@ -4,7 +4,7 @@ Write-Host " AICTE-NBA-NIRF Institutional Intelligence & Rank Predictor" -Foregr
 Write-Host " Ajeenkya DY Patil University (ADYPU) Theme Edition" -ForegroundColor DarkYellow
 Write-Host "==========================================================" -ForegroundColor DarkRed
 
-$port = 8000
+$port = 8080
 $conn = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
 
 if ($conn) {
