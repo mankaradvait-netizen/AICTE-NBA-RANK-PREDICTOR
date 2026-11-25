@@ -37,10 +37,14 @@ class AccreditationAppController
         private readonly ?UniversalDocumentIngestionService $universalIngestion = null
     ) {
         if (session_status() === PHP_SESSION_NONE) {
-            session_start([
+            session_name(self::SESSION_COOKIE);
+            if (!empty($_COOKIE[self::SESSION_COOKIE])) {
+                session_id((string)$_COOKIE[self::SESSION_COOKIE]);
+            }
+            @session_start([
                 'cookie_httponly' => true,
                 'cookie_samesite' => 'Strict',
-                'use_strict_mode' => true,
+                'use_strict_mode' => false,
             ]);
         }
     }
@@ -50,7 +54,7 @@ class AccreditationAppController
     // =========================================================================
     public function showSignIn(Request $request, Response $response): Response
     {
-        if ($this->isAuthenticated()) {
+        if ($this->isAuthenticated($request)) {
             return $this->redirect($response, '/input');
         }
 
@@ -104,8 +108,8 @@ class AccreditationAppController
             session_regenerate_id(true);
         }
 
-        // Secure HttpOnly session token and CSRF token
-        $sessionToken = bin2hex(random_bytes(32));
+        // Secure HttpOnly session token matching native session ID and CSRF token
+        $sessionToken = session_id();
         $csrfToken = bin2hex(random_bytes(32));
         $_SESSION['user_id'] = (string)$user['id'];
         $_SESSION['user_email'] = $email;
@@ -187,7 +191,7 @@ class AccreditationAppController
     // =========================================================================
     public function showDataInput(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->redirect($response, '/');
         }
 
@@ -203,7 +207,7 @@ class AccreditationAppController
 
     public function handleAnalyse(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->jsonResponse($response, ['error' => 'Unauthorized'], 401);
         }
 
@@ -256,7 +260,7 @@ class AccreditationAppController
 
     public function handleUploadWorkbooks(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->jsonResponse($response, ['error' => 'Unauthorized'], 401);
         }
 
@@ -660,7 +664,7 @@ class AccreditationAppController
 
     public function handleResolveIssue(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->jsonResponse($response, ['error' => 'Unauthorized'], 401);
         }
 
@@ -683,7 +687,7 @@ class AccreditationAppController
 
     public function handleResolveAllIssues(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->jsonResponse($response, ['error' => 'Unauthorized'], 401);
         }
 
@@ -708,7 +712,7 @@ class AccreditationAppController
 
     public function handleDatasetFreeze(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->jsonResponse($response, ['error' => 'Unauthorized'], 401);
         }
 
@@ -780,7 +784,7 @@ class AccreditationAppController
 
     public function handleSimulate(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated() || empty($_SESSION['analysis_data'])) {
+        if (!$this->isAuthenticated($request) || empty($_SESSION['analysis_data'])) {
             return $this->jsonResponse($response, ['error' => 'No active analysis data to simulate.'], 401);
         }
 
@@ -852,7 +856,7 @@ class AccreditationAppController
 
     public function handleAiStrategy(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated() || empty($_SESSION['analysis_data'])) {
+        if (!$this->isAuthenticated($request) || empty($_SESSION['analysis_data'])) {
             return $this->jsonResponse($response, ['error' => 'No active analysis session.'], 401);
         }
 
@@ -872,7 +876,7 @@ class AccreditationAppController
 
     public function downloadMastersZip(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->redirect($response, '/');
         }
 
@@ -906,7 +910,7 @@ class AccreditationAppController
 
     public function downloadTemplate(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->redirect($response, '/');
         }
 
@@ -961,7 +965,7 @@ class AccreditationAppController
     // =========================================================================
     public function showAnalysis(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated()) {
+        if (!$this->isAuthenticated($request)) {
             return $this->redirect($response, '/');
         }
 
@@ -981,7 +985,7 @@ class AccreditationAppController
 
     public function downloadPdf(Request $request, Response $response): Response
     {
-        if (!$this->isAuthenticated() || empty($_SESSION['analysis_data'])) {
+        if (!$this->isAuthenticated($request) || empty($_SESSION['analysis_data'])) {
             return $this->redirect($response, '/');
         }
 
@@ -1020,9 +1024,33 @@ class AccreditationAppController
     // =========================================================================
     // INTERNAL HELPERS & RENDERING
     // =========================================================================
-    private function isAuthenticated(): bool
+    private function isAuthenticated(?Request $request = null): bool
     {
-        return !empty($_SESSION['user_id']) && !empty($_SESSION['session_token']);
+        if (!empty($_SESSION['user_id']) && !empty($_SESSION['session_token'])) {
+            return true;
+        }
+
+        if ($request !== null) {
+            $cookies = $request->getCookieParams();
+            $token = $cookies[self::SESSION_COOKIE] ?? ($_COOKIE[self::SESSION_COOKIE] ?? null);
+            if (!empty($token) && $token !== session_id()) {
+                if (session_status() === PHP_SESSION_ACTIVE) {
+                    session_write_close();
+                }
+                session_name(self::SESSION_COOKIE);
+                session_id((string)$token);
+                @session_start([
+                    'cookie_httponly' => true,
+                    'cookie_samesite' => 'Strict',
+                    'use_strict_mode' => false,
+                ]);
+                if (!empty($_SESSION['user_id'])) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
 
