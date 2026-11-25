@@ -1276,7 +1276,7 @@ class UniversalDocumentIngestionService
             return false;
         }
 
-        $score100 = ($val <= 10.0) ? round($val * 10.0, 2) : min(100.0, $val);
+        $score100 = min(100.0, max(0.0, (float)$val));
         $colLetter = Coordinate::stringFromColumnIndex($scoreCol + 1);
 
         $facts[] = [
@@ -1286,7 +1286,7 @@ class UniversalDocumentIngestionService
             'field_code' => 'perception.peer_score',
             'canonical_field_id' => 'perception.peer_score',
             'canonical_name' => 'Peer Perception Survey Score',
-            'source_label' => "Perception Aggregate Score ({$val}/10 => {$score100}/100)",
+            'source_label' => "Perception Aggregate Score ({$score100}/100)",
             'raw_value' => $score100,
             'normalized_value' => $score100,
             'unit' => 'score',
@@ -2777,13 +2777,13 @@ class UniversalDocumentIngestionService
 
         $pcs = $latestByField['facilities.pcs_score'] ?? (!empty($pcsCandidates) ? max($pcsCandidates) : 20.0);
 
-        $pr = 74.0;
+        $pr = 7.4;
         if (isset($latestByField['perception.peer_score']) && $latestByField['perception.peer_score'] > 0.0) {
-            $rawPr = $latestByField['perception.peer_score'];
-            $pr = ($rawPr <= 10.0) ? round($rawPr * 10.0, 2) : min(100.0, $rawPr);
+            $rawPr = (float)$latestByField['perception.peer_score'];
+            $pr = min(100.0, max(0.0, $rawPr));
         } elseif (!empty($prCandidates)) {
-            $rawPr = max($prCandidates);
-            $pr = ($rawPr <= 10.0) ? round($rawPr * 10.0, 2) : min(100.0, $rawPr);
+            $rawPr = (float)max($prCandidates);
+            $pr = min(100.0, max(0.0, $rawPr));
         }
 
         $nphd = $latestByField['outcome.phd_graduated'] ?? (!empty($phdGradCandidates) ? max($phdGradCandidates) : 0.0);

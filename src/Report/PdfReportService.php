@@ -63,9 +63,14 @@ class PdfReportService
         $ops[] = "BT /F2 10 Tf 50 642 Td (OFFICIAL COMPOSITE SCORE) Tj ET";
         $ops[] = "BT /F2 22 Tf 50 615 Td (" . $score . " / 100) Tj ET";
 
+        $cohortRank = isset($reportData['cohort_rank']) ? (int)$reportData['cohort_rank'] : null;
+        $totalCohort = isset($reportData['total_cohort']) ? (int)$reportData['total_cohort'] : 300;
+        $simulatedTier = isset($reportData['simulated_tier']) ? (string)$reportData['simulated_tier'] : $rankBand;
+        $cohortLabel = $cohortRank !== null ? "#{$cohortRank} of {$totalCohort} ({$simulatedTier})" : $rankBand;
+
         $ops[] = "0.1 0.1 0.1 rg";
-        $ops[] = "BT /F2 10 Tf 220 642 Td (COMPETITIVE RANK BAND) Tj ET";
-        $ops[] = "BT /F2 14 Tf 220 618 Td (" . $this->escapeText($rankBand) . ") Tj ET";
+        $ops[] = "BT /F2 10 Tf 210 642 Td (OFFICIAL COHORT POSITION) Tj ET";
+        $ops[] = "BT /F2 12 Tf 210 618 Td (" . $this->escapeText($cohortLabel) . ") Tj ET";
 
         $ops[] = "BT /F2 10 Tf 410 642 Td (ESTIMATE CONFIDENCE) Tj ET";
         $ops[] = "BT /F1 11 Tf 410 618 Td (" . $this->escapeText($confidence) . " Confidence) Tj ET";

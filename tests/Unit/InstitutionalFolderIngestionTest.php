@@ -118,7 +118,7 @@ class InstitutionalFolderIngestionTest extends TestCase
         $this->assertEquals(0.0, $kpis['N_country_pct']);
         $this->assertEquals(80.52, $kpis['ESC_pct']);
         $this->assertEquals(20.0, $kpis['PCS_score']);
-        $this->assertEquals(74.0, $kpis['PR_survey_val']);
+        $this->assertEquals(7.4, $kpis['PR_survey_val']);
     }
 
     public function testExecutionThroughScoreEngineWithInstitutionalKpis(): void
@@ -160,7 +160,7 @@ class InstitutionalFolderIngestionTest extends TestCase
             'FW_pct' => 36.44,
             'ESC_pct' => 80.52,
             'PCS_score' => 20.0,
-            'PR_survey_val' => 74.0,
+            'PR_survey_val' => 7.4,
         ];
 
         $result = $engine->score($inputs, 'ENGINEERING', '2026-2027');
@@ -169,12 +169,21 @@ class InstitutionalFolderIngestionTest extends TestCase
         $this->assertArrayHasKey('total_score', $result);
         $this->assertArrayHasKey('parameter_scores', $result);
 
-        // Score must evaluate to ~51.94
-        $this->assertEqualsWithDelta(51.94, $result['total_score'], 0.1);
+        // Calibrated non-inflated score evaluates to ~43.10
+        $this->assertEqualsWithDelta(43.10, $result['total_score'], 0.1);
 
         $rankPredictor = new \App\Engine\RankPredictor();
         $rankResult = $rankPredictor->predict($result['total_score']);
-        $this->assertSame('Rank 51 - 100', $rankResult['predicted_band']);
+        $this->assertSame('Rank 101 - 150', $rankResult['predicted_band']);
+
+        // Compare against official 300-institution cohort
+        $cohortResult = $rankPredictor->compareWithCohort($result['total_score'], 'Sandip Institute of Technology & Research Centre (SITRC)');
+        $this->assertSame(300, $cohortResult['total_cohort_count']);
+        $this->assertEquals(108, $cohortResult['simulated_cohort_rank']);
+        $this->assertSame('Rank 101 - 150', $cohortResult['simulated_tier']);
+        $this->assertNotEmpty($cohortResult['peers_above']);
+        $this->assertNotEmpty($cohortResult['peers_below']);
+        $this->assertEqualsWithDelta(0.85, $cohortResult['tier_cutoffs']['tier_top_100']['gap'], 0.05);
 
         // Check key sub-parameters
         $pScores = $result['parameter_scores'];
@@ -192,8 +201,8 @@ class InstitutionalFolderIngestionTest extends TestCase
         $this->assertGreaterThan(0.0, $pScores['WD']['raw_score']);
         $this->assertGreaterThan(0.0, $pScores['ESCS']['raw_score']);
         $this->assertGreaterThan(0.0, $pScores['PCS']['raw_score']);
-        $this->assertEquals(74.0, $pScores['PR']['clamped_score']);
-        $this->assertEquals(7.40, $result['main_parameter_subtotals']['PR']['weighted_total']);
+        $this->assertEquals(7.4, $pScores['PR']['clamped_score']);
+        $this->assertEquals(0.74, $result['main_parameter_subtotals']['PR']['weighted_total']);
     }
 
     public function testUploadWorkbooksFolderApiEndpoint(): void
@@ -232,6 +241,6 @@ class InstitutionalFolderIngestionTest extends TestCase
         $this->assertEquals(82.39, $mapped['NG_pct']);
         $this->assertEquals(91.64, $mapped['NP_pct']);
         $this->assertEquals(8.36, $mapped['NHS_pct']);
-        $this->assertEquals(74.0, $mapped['PR_survey_val']);
+        $this->assertEquals(7.4, $mapped['PR_survey_val']);
     }
 }

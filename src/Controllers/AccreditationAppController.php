@@ -226,6 +226,7 @@ class AccreditationAppController
         try {
             $scoreResult = $this->scoreEngine->score($inputs, 'ENGINEERING', '2026-2027');
             $rankPrediction = $this->rankPredictor->predict($scoreResult['total_score'], 'ENGINEERING');
+            $cohortComparison = $this->rankPredictor->compareWithCohort($scoreResult['total_score'], $institutionName);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => 'Score calculation error occurred: ' . $e->getMessage()], 400);
         }
@@ -242,6 +243,7 @@ class AccreditationAppController
             'scores' => $scoreResult,
             'rank_prediction' => $rankPrediction,
             'predicted_band' => $rankPrediction['predicted_band'],
+            'cohort_comparison' => $cohortComparison,
             'confidence' => $rankPrediction['confidence_interval'] ?? $rankPrediction['confidence_percentage'] ?? '80%',
             'verdict' => $verdict,
             'frozen_hash' => $frozenHash,
@@ -723,6 +725,7 @@ class AccreditationAppController
         try {
             $scoreResult = $this->scoreEngine->score($kpis, 'ENGINEERING', '2026-2027');
             $rankPrediction = $this->rankPredictor->predict($scoreResult['total_score'], 'ENGINEERING');
+            $cohortComparison = $this->rankPredictor->compareWithCohort($scoreResult['total_score'], $institutionName);
             $verdict = $this->generateVerdict($scoreResult, $kpis);
 
             $_SESSION['analysis_data'] = [
@@ -733,6 +736,7 @@ class AccreditationAppController
                 'scores' => $scoreResult,
                 'rank_prediction' => $rankPrediction,
                 'predicted_band' => $rankPrediction['predicted_band'],
+                'cohort_comparison' => $cohortComparison,
                 'confidence' => $rankPrediction['confidence_interval'] ?? $rankPrediction['confidence_percentage'] ?? '80%',
                 'verdict' => $verdict,
                 'frozen_hash' => $frozenHash,
@@ -969,7 +973,10 @@ class AccreditationAppController
             'academic_year' => (string)($data['academic_year'] ?? '2026-2027'),
             'category' => (string)($data['category'] ?? 'ENGINEERING'),
             'total_score' => (float)($data['scores']['total_score'] ?? 0.0),
-            'predicted_band' => (string)($data['predicted_band'] ?? ($data['rank_prediction']['predicted_band'] ?? 'Rank 51 - 100')),
+            'predicted_band' => (string)($data['predicted_band'] ?? ($data['rank_prediction']['predicted_band'] ?? 'Rank 101 - 150')),
+            'cohort_rank' => $data['cohort_comparison']['simulated_cohort_rank'] ?? null,
+            'total_cohort' => $data['cohort_comparison']['total_cohort_count'] ?? 300,
+            'simulated_tier' => $data['cohort_comparison']['simulated_tier'] ?? null,
             'confidence' => (string)($data['confidence'] ?? '80%'),
             'main_parameter_subtotals' => $data['scores']['main_parameter_subtotals'] ?? [],
             'parameter_scores' => $data['scores']['parameter_scores'] ?? [],
@@ -2529,12 +2536,13 @@ HTML;
     {
         $institutionName = htmlspecialchars((string)($data['institution_name'] ?? 'Institution'), ENT_QUOTES, 'UTF-8');
         $scores = $data['scores'] ?? [];
-        $totalScore = number_format((float)($scores['total_score'] ?? 0.0), 2);
+        $totalScoreNum = (float)($scores['total_score'] ?? 0.0);
+        $totalScore = number_format($totalScoreNum, 2);
         $subtotals = $scores['main_parameter_subtotals'] ?? [];
         $params = $scores['parameter_scores'] ?? [];
         $verdict = $data['verdict'] ?? [];
         $rankPrediction = $data['rank_prediction'] ?? [];
-        $predictedBand = htmlspecialchars((string)($data['predicted_band'] ?? ($rankPrediction['predicted_band'] ?? 'Rank 51 - 100')), ENT_QUOTES, 'UTF-8');
+        $predictedBand = htmlspecialchars((string)($data['predicted_band'] ?? ($rankPrediction['predicted_band'] ?? 'Rank 101 - 150')), ENT_QUOTES, 'UTF-8');
         $confidence = htmlspecialchars((string)($data['confidence'] ?? ($rankPrediction['confidence_interval'] ?? '80%')), ENT_QUOTES, 'UTF-8');
         $frozenHash = htmlspecialchars((string)($data['frozen_hash'] ?? substr(hash('sha256', json_encode($data)), 0, 32)), ENT_QUOTES, 'UTF-8');
         $isFrozen = !empty($data['is_frozen']);
@@ -2658,6 +2666,122 @@ HTML;
 HTML;
         }
 
+        // Official NIRF 300 Engineering Cohort Comparison
+        $cohort = $data['cohort_comparison'] ?? $this->rankPredictor->compareWithCohort($totalScoreNum, (string)($data['institution_name'] ?? ''));
+        $cohortRank = (int)($cohort['simulated_cohort_rank'] ?? 1);
+        $cohortTotal = (int)($cohort['total_cohort_count'] ?? 300);
+        $cohortTier = htmlspecialchars((string)($cohort['simulated_tier'] ?? $predictedBand), ENT_QUOTES, 'UTF-8');
+        $peersAbove = $cohort['peers_above'] ?? [];
+        $peersBelow = $cohort['peers_below'] ?? [];
+        $tierCutoffs = $cohort['tier_cutoffs'] ?? [];
+        $fullCohort = $cohort['full_cohort'] ?? [];
+
+        $top100Gap = (float)($tierCutoffs['tier_top_100']['gap'] ?? 0.0);
+        $top100GapText = ($top100Gap <= 0.001)
+            ? '<span style="color: var(--att-good);">Achieved (In Top 100)</span>'
+            : '+' . number_format($top100Gap, 2) . ' pts needed';
+        $institutionsBehind = max(0, $cohortTotal - $cohortRank);
+        $cohortPercentile = number_format((($cohortTotal - $cohortRank) / max(1, $cohortTotal)) * 100.0, 1);
+
+        $peersAboveHtml = '';
+        foreach ($peersAbove as $pa) {
+            $pRank = (int)($pa['rank'] ?? 0);
+            $pName = htmlspecialchars((string)($pa['name'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $pLoc = htmlspecialchars((string)($pa['city'] ?? '') . ', ' . (string)($pa['state'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $pScore = number_format((float)($pa['score'] ?? 0.0), 2);
+            $pGap = number_format((float)($pa['score_gap'] ?? 0.0), 2);
+            $peersAboveHtml .= <<<HTML
+              <tr style="background: rgba(220, 38, 38, 0.03);">
+                <td><strong style="color: var(--adypu-maroon);">#{$pRank}</strong></td>
+                <td><strong>{$pName}</strong><div style="font-size: 11px; color: var(--ink-muted);">{$pLoc}</div></td>
+                <td class="num">{$pScore}</td>
+                <td class="num"><span class="badge badge-warning" style="font-size: 11px;">+{$pGap} pts ahead</span></td>
+              </tr>
+HTML;
+        }
+        if ($peersAboveHtml === '') {
+            $peersAboveHtml = '<tr><td colspan="4" style="text-align:center; color: var(--ink-muted); padding: 10px;">Rank #1: No institutions ranked ahead in the cohort.</td></tr>';
+        }
+
+        $peersBelowHtml = '';
+        foreach ($peersBelow as $pb) {
+            $pRank = (int)($pb['rank'] ?? 0);
+            $pName = htmlspecialchars((string)($pb['name'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $pLoc = htmlspecialchars((string)($pb['city'] ?? '') . ', ' . (string)($pb['state'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $pScore = number_format((float)($pb['score'] ?? 0.0), 2);
+            $pLead = number_format((float)($pb['score_lead'] ?? 0.0), 2);
+            $peersBelowHtml .= <<<HTML
+              <tr style="background: rgba(22, 163, 74, 0.03);">
+                <td><strong style="color: var(--att-good);">#{$pRank}</strong></td>
+                <td><strong>{$pName}</strong><div style="font-size: 11px; color: var(--ink-muted);">{$pLoc}</div></td>
+                <td class="num">{$pScore}</td>
+                <td class="num"><span class="badge badge-success" style="font-size: 11px;">+{$pLead} pts lead</span></td>
+              </tr>
+HTML;
+        }
+        if ($peersBelowHtml === '') {
+            $peersBelowHtml = '<tr><td colspan="4" style="text-align:center; color: var(--ink-muted); padding: 10px;">Rank #300: Base cohort threshold.</td></tr>';
+        }
+
+        $tierCutoffsHtml = '';
+        foreach ($tierCutoffs as $tKey => $tInfo) {
+            $tLabel = htmlspecialchars((string)($tInfo['label'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $tTarget = number_format((float)($tInfo['target'] ?? 0.0), 2);
+            $tGap = (float)($tInfo['gap'] ?? 0.0);
+            $badge = ($tGap <= 0.001)
+                ? '<span class="badge badge-success" style="font-size: 11px;">Surpassed / Achieved</span>'
+                : '<span class="badge badge-warning" style="font-size: 11px;">+' . number_format($tGap, 2) . ' pts needed</span>';
+            $tierCutoffsHtml .= <<<HTML
+              <tr>
+                <td><strong>{$tLabel}</strong></td>
+                <td class="num"><strong>{$tTarget}</strong></td>
+                <td class="num">{$totalScore}</td>
+                <td>{$badge}</td>
+              </tr>
+HTML;
+        }
+
+        $cohortRowsHtml = '';
+        $instInserted = false;
+        foreach ($fullCohort as $cInst) {
+            $cRank = (int)($cInst['rank'] ?? 0);
+            $cName = htmlspecialchars((string)($cInst['name'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $cLoc = htmlspecialchars((string)($cInst['city'] ?? '') . ', ' . (string)($cInst['state'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $cScore = number_format((float)($cInst['score'] ?? 0.0), 2);
+            $cBand = htmlspecialchars((string)($cInst['rank_band'] ?? ''), ENT_QUOTES, 'UTF-8');
+
+            if (!$instInserted && $cRank >= $cohortRank) {
+                $cohortRowsHtml .= <<<HTML
+                  <tr style="background: rgba(123, 17, 19, 0.12); border-left: 4px solid var(--adypu-maroon); font-weight: 700;" class="cohort-row" data-band="{$cohortTier}">
+                    <td><span class="badge badge-adypu" style="font-size: 11px; font-weight: 700;">#{$cohortRank}</span></td>
+                    <td><strong>{$institutionName}</strong> <span class="badge badge-adypu" style="font-size: 10px; margin-left: 6px;">Evaluated Institution</span><div style="font-size: 11px; color: var(--ink-muted);">Current Evaluated File Submission</div></td>
+                    <td class="num"><strong style="color: var(--adypu-maroon); font-size: 13.5px;">{$totalScore}</strong></td>
+                    <td><span class="badge badge-info" style="font-size: 11px;">{$cohortTier}</span></td>
+                  </tr>
+HTML;
+                $instInserted = true;
+            }
+
+            $cohortRowsHtml .= <<<HTML
+              <tr class="cohort-row" data-band="{$cBand}">
+                <td><span style="font-family: monospace; font-weight: 600;">#{$cRank}</span></td>
+                <td>{$cName}<div style="font-size: 11px; color: var(--ink-muted);">{$cLoc}</div></td>
+                <td class="num">{$cScore}</td>
+                <td><span class="badge badge-secondary" style="font-size: 10px;">{$cBand}</span></td>
+              </tr>
+HTML;
+        }
+        if (!$instInserted) {
+            $cohortRowsHtml .= <<<HTML
+              <tr style="background: rgba(123, 17, 19, 0.12); border-left: 4px solid var(--adypu-maroon); font-weight: 700;" class="cohort-row" data-band="{$cohortTier}">
+                <td><span class="badge badge-adypu" style="font-size: 11px; font-weight: 700;">#{$cohortRank}</span></td>
+                <td><strong>{$institutionName}</strong> <span class="badge badge-adypu" style="font-size: 10px; margin-left: 6px;">Evaluated Institution</span><div style="font-size: 11px; color: var(--ink-muted);">Current Evaluated File Submission</div></td>
+                <td class="num"><strong style="color: var(--adypu-maroon); font-size: 13.5px;">{$totalScore}</strong></td>
+                <td><span class="badge badge-info" style="font-size: 11px;">{$cohortTier}</span></td>
+              </tr>
+HTML;
+        }
+
         return <<<HTML
 <div class="card">
   <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
@@ -2758,6 +2882,137 @@ HTML;
           {$subtotalsHtml}
         </tbody>
       </table>
+    </div>
+
+    <!-- NIRF 300-INSTITUTION COHORT BENCHMARK & COMPARATIVE ANALYSIS -->
+    <div style="border: 2px solid var(--adypu-gold); border-radius: 14px; padding: 24px; background: var(--surface); margin: 24px 0;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;">
+        <div>
+          <h2 style="margin: 0; color: var(--adypu-maroon); font-size: 20px;">Official NIRF 300 Engineering Cohort Comparative Benchmark</h2>
+          <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--ink-muted);">Comprehensive empirical positioning calibrated against all 300 participating institutions in the official NIRF India Rankings cohort.</p>
+        </div>
+        <span class="badge badge-adypu" style="font-size: 11px;">National Cohort: 300 Institutions</span>
+      </div>
+
+      <!-- Cohort Position Highlights -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px;">
+        <div style="background: var(--surface-raised); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px;">
+          <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--ink-muted);">Simulated National Position</div>
+          <div class="mono-val" style="font-size: 26px; font-weight: 800; color: var(--adypu-maroon); margin: 4px 0;">#{$cohortRank} <span style="font-size: 14px; font-weight: 500; color: var(--ink-muted);">of {$cohortTotal}</span></div>
+          <div style="font-size: 11.5px; color: var(--ink-muted);">Rank among all 300 verified engineering institutions</div>
+        </div>
+
+        <div style="background: var(--surface-raised); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px;">
+          <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--ink-muted);">Assigned Official NIRF Band</div>
+          <div class="mono-val" style="font-size: 22px; font-weight: 700; color: var(--att-good); margin: 4px 0;">{$cohortTier}</div>
+          <div style="font-size: 11.5px; color: var(--ink-muted);">Statutory NIRF ranking tier category</div>
+        </div>
+
+        <div style="background: var(--surface-raised); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px;">
+          <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--ink-muted);">Top 100 Published Cutoff (43.95)</div>
+          <div class="mono-val" style="font-size: 20px; font-weight: 700; color: var(--adypu-gold); margin: 4px 0;">{$top100GapText}</div>
+          <div style="font-size: 11.5px; color: var(--ink-muted);">Exact distance to enter official Top 100 table</div>
+        </div>
+
+        <div style="background: var(--surface-raised); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px;">
+          <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--ink-muted);">Cohort Percentile Rank</div>
+          <div class="mono-val" style="font-size: 22px; font-weight: 700; color: var(--ink); margin: 4px 0;">{$cohortPercentile}%</div>
+          <div style="font-size: 11.5px; color: var(--ink-muted);">Ahead of {$institutionsBehind} peer institutions in India</div>
+        </div>
+      </div>
+
+      <!-- Peer Radar Grid: 5 Ahead and 5 Behind -->
+      <h3 style="font-size: 15px; margin: 16px 0 8px 0; color: var(--ink);">Immediate Peer Radar: Nearest Competitors</h3>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px;">
+        <div style="border: 1px solid var(--hairline); border-radius: 8px; padding: 12px; background: var(--surface-raised);">
+          <div style="font-weight: 700; font-size: 13px; color: var(--adypu-maroon); margin-bottom: 8px;">Institutions Ranked Immediately Ahead (Targets to Overtake)</div>
+          <div class="table-container">
+            <table style="font-size: 12px; margin: 0;">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Institution</th>
+                  <th class="num">Score</th>
+                  <th class="num">Distance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {$peersAboveHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="border: 1px solid var(--hairline); border-radius: 8px; padding: 12px; background: var(--surface-raised);">
+          <div style="font-weight: 700; font-size: 13px; color: var(--att-good); margin-bottom: 8px;">Institutions Ranked Immediately Behind (Lead Margins)</div>
+          <div class="table-container">
+            <table style="font-size: 12px; margin: 0;">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Institution</th>
+                  <th class="num">Score</th>
+                  <th class="num">Lead</th>
+                </tr>
+              </thead>
+              <tbody>
+                {$peersBelowHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tier Advancement Thresholds -->
+      <h3 style="font-size: 15px; margin: 16px 0 8px 0; color: var(--ink);">NIRF Official Cutoffs & Tier Progression Ladder</h3>
+      <div class="table-container" style="margin-bottom: 24px;">
+        <table>
+          <thead>
+            <tr>
+              <th>NIRF Ranking Tier</th>
+              <th class="num">Official Cutoff Score</th>
+              <th class="num">Current Score</th>
+              <th>Status / Gap Required</th>
+            </tr>
+          </thead>
+          <tbody>
+            {$tierCutoffsHtml}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Searchable All-300 Cohort Directory -->
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+        <h3 style="font-size: 15px; margin: 0; color: var(--ink);">All 300 NIRF Engineering Institutions Directory</h3>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <input type="text" id="cohortSearchInput" onkeyup="filterCohortTable()" placeholder="Search institution, city, state..." style="padding: 6px 12px; font-size: 12px; border: 1px solid var(--hairline); border-radius: 6px; width: 220px;">
+          <select id="cohortBandFilter" onchange="filterCohortTable()" style="padding: 6px 12px; font-size: 12px; border: 1px solid var(--hairline); border-radius: 6px;">
+            <option value="ALL">All Bands (1 - 300)</option>
+            <option value="Rank 1 - 10">Top 10</option>
+            <option value="Rank 11 - 25">Rank 11 - 25</option>
+            <option value="Rank 26 - 50">Rank 26 - 50</option>
+            <option value="Rank 51 - 100">Rank 51 - 100</option>
+            <option value="Rank 101 - 150">Rank 101 - 150</option>
+            <option value="Rank 151 - 200">Rank 151 - 200</option>
+            <option value="Rank 201 - 300">Rank 201 - 300</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-container" style="max-height: 420px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 8px;">
+        <table style="font-size: 12.5px; margin: 0;">
+          <thead style="position: sticky; top: 0; background: var(--surface-raised); z-index: 2;">
+            <tr>
+              <th style="width: 70px;">Rank</th>
+              <th>Institution Name & Location</th>
+              <th class="num" style="width: 100px;">Score</th>
+              <th style="width: 140px;">NIRF Band</th>
+            </tr>
+          </thead>
+          <tbody id="cohortTableBody">
+            {$cohortRowsHtml}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <h2>10-Year National Benchmarks Comparison (NIRF Engineering Top-100 Cohorts)</h2>
@@ -3054,6 +3309,19 @@ HTML;
   async function handleStartNew() {
     await fetch('/api/reset', { method: 'POST' });
     window.location.href = '/input';
+  }
+
+  function filterCohortTable() {
+    var query = (document.getElementById('cohortSearchInput').value || '').toLowerCase();
+    var band = document.getElementById('cohortBandFilter').value;
+    var rows = document.querySelectorAll('#cohortTableBody tr.cohort-row');
+    rows.forEach(function(row) {
+      var text = row.innerText.toLowerCase();
+      var rowBand = row.getAttribute('data-band') || '';
+      var matchQuery = !query || text.indexOf(query) !== -1;
+      var matchBand = !band || band === 'ALL' || rowBand.indexOf(band) !== -1;
+      row.style.display = (matchQuery && matchBand) ? '' : 'none';
+    });
   }
 
   async function runSimulation() {

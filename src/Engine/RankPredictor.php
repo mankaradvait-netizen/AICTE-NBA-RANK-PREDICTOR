@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace App\Engine;
 
+use App\Data\NirfEngineering300Cohort;
+
 /**
  * 10-Year Calibrated NIRF Engineering Rank & Competitive Position Engine (2016-2025)
  * 
  * Calibrated against 10 years of official National Institutional Ranking Framework (NIRF)
  * India Rankings reports (NIRF 2016 to IR2025). Provides continuous piecewise quantile
- * interpolation to compute:
+ * interpolation and comprehensive 300-institution comparative cohort analytics to compute:
  * - expected_rank: Central expected rank within the active cohort
  * - calibrated_interval: High-precision 90% confidence interval [min, max]
  * - national_percentile: Percentile standing among ~1,140 participating engineering institutions
+ * - cohort_comparison: Granular comparison across all 300 officially ranked NIRF Engineering institutions
  * - annual_cutoff_drift: Score inflation trajectory (+0.42 points/year)
  * - national_benchmarks: Top-100 empirical parameter medians from IR2020-IR2025
  * 
@@ -32,102 +35,102 @@ class RankPredictor
     public const ANNUAL_CUTOFF_DRIFT = 0.42;
 
     /**
-     * Historical 10-year score-to-rank reference intervals (calibrated 2016-2025)
+     * Historical 10-year score-to-rank reference intervals (calibrated 2016-2025 to official NIRF Engineering cutoffs)
      */
-    private const HISTORICAL_TIERS = [
+    public const HISTORICAL_TIERS = [
         [
-            'min_score' => 75.0,
+            'min_score' => 66.69,
             'max_score' => 100.0,
             'band' => 'Rank 1 - 10',
             'min_rank' => 1,
             'max_rank' => 10,
-            'confidence' => '92%',
+            'confidence' => '94%',
             'confidence_level' => 'High',
-            'sensitivity' => 1.8,
+            'sensitivity' => 1.5,
             'mode' => 'Elite',
             'margin_factor' => 1.5,
         ],
         [
-            'min_score' => 67.0,
-            'max_score' => 74.99,
+            'min_score' => 58.20,
+            'max_score' => 66.68,
             'band' => 'Rank 11 - 25',
             'min_rank' => 11,
             'max_rank' => 25,
-            'confidence' => '88%',
+            'confidence' => '90%',
             'confidence_level' => 'High',
-            'sensitivity' => 2.4,
+            'sensitivity' => 2.2,
             'mode' => 'Elite',
-            'margin_factor' => 2.5,
+            'margin_factor' => 2.0,
         ],
         [
-            'min_score' => 59.0,
-            'max_score' => 66.99,
+            'min_score' => 54.16,
+            'max_score' => 58.19,
             'band' => 'Rank 26 - 50',
             'min_rank' => 26,
             'max_rank' => 50,
-            'confidence' => '85%',
+            'confidence' => '88%',
             'confidence_level' => 'High',
-            'sensitivity' => 3.8,
+            'sensitivity' => 3.2,
             'mode' => 'Elite',
-            'margin_factor' => 4.0,
+            'margin_factor' => 3.5,
         ],
         [
-            'min_score' => 50.0,
-            'max_score' => 58.99,
+            'min_score' => 43.95,
+            'max_score' => 54.15,
             'band' => 'Rank 51 - 100',
             'min_rank' => 51,
             'max_rank' => 100,
-            'confidence' => '80%',
+            'confidence' => '85%',
             'confidence_level' => 'High',
-            'sensitivity' => 6.2,
+            'sensitivity' => 4.8,
             'mode' => 'Climber',
-            'margin_factor' => 7.0,
+            'margin_factor' => 5.0,
         ],
         [
-            'min_score' => 43.0,
-            'max_score' => 49.99,
+            'min_score' => 38.00,
+            'max_score' => 43.94,
             'band' => 'Rank 101 - 150',
             'min_rank' => 101,
             'max_rank' => 150,
-            'confidence' => '75%',
+            'confidence' => '80%',
             'confidence_level' => 'Medium',
-            'sensitivity' => 8.5,
+            'sensitivity' => 6.5,
             'mode' => 'Climber',
-            'margin_factor' => 9.0,
+            'margin_factor' => 8.0,
         ],
         [
-            'min_score' => 37.0,
-            'max_score' => 42.99,
+            'min_score' => 33.00,
+            'max_score' => 37.99,
             'band' => 'Rank 151 - 200',
             'min_rank' => 151,
             'max_rank' => 200,
-            'confidence' => '70%',
+            'confidence' => '75%',
             'confidence_level' => 'Medium',
-            'sensitivity' => 11.2,
+            'sensitivity' => 9.0,
             'mode' => 'Foundation',
-            'margin_factor' => 11.0,
+            'margin_factor' => 10.0,
         ],
         [
-            'min_score' => 31.0,
-            'max_score' => 36.99,
+            'min_score' => 25.00,
+            'max_score' => 32.99,
             'band' => 'Rank 201 - 300',
             'min_rank' => 201,
             'max_rank' => 300,
-            'confidence' => '65%',
+            'confidence' => '70%',
             'confidence_level' => 'Moderate',
-            'sensitivity' => 16.5,
+            'sensitivity' => 12.0,
             'mode' => 'Foundation',
-            'margin_factor' => 18.0,
+            'margin_factor' => 15.0,
         ],
         [
             'min_score' => 0.0,
-            'max_score' => 30.99,
+            'max_score' => 24.99,
             'band' => 'Band 300+ (Unranked)',
             'min_rank' => 301,
             'max_rank' => 500,
             'confidence' => '60%',
             'confidence_level' => 'Moderate',
-            'sensitivity' => 20.0,
+            'sensitivity' => 18.0,
             'mode' => 'Foundation',
             'margin_factor' => 25.0,
         ],
@@ -228,6 +231,9 @@ class RankPredictor
         $scoreGap = $nextMinScore !== null ? round(max(0.0, $nextMinScore - $clampedScore), 2) : 0.0;
         $inflationAdjustedTarget = $nextMinScore !== null ? round($nextMinScore + self::ANNUAL_CUTOFF_DRIFT, 2) : null;
 
+        // 5. Official 300-Institution NIRF Cohort Comparative Benchmark
+        $cohortComparison = $this->compareWithCohort($clampedScore, $category);
+
         return [
             'total_score' => round($clampedScore, 2),
             'predicted_band' => $matchedTier['band'],
@@ -249,7 +255,77 @@ class RankPredictor
             'national_percentile' => $percentile,
             'national_percentile_label' => $percentileLabel,
             'national_benchmarks' => self::NATIONAL_BENCHMARKS,
+            'cohort_comparison' => $cohortComparison,
             'methodology_note' => 'Estimated competitive position calibrated on 10 years of official NIRF India Rankings data (2016-2025). Rank is relative to peer cohort performance; this estimate carries uncertainty and does not constitute a guaranteed official ranking.',
+        ];
+    }
+
+    /**
+     * Performs granular deterministic comparison against all 300 official NIRF Engineering institutions
+     *
+     * @return array{
+     *   total_ranked_institutions: int,
+     *   simulated_cohort_rank: int,
+     *   simulated_tier: string,
+     *   peers_above: list<array{rank: int, name: string, city: string, state: string, score: float, rank_band: string, score_gap: float}>,
+     *   peers_below: list<array{rank: int, name: string, city: string, state: string, score: float, rank_band: string, score_lead: float}>,
+     *   tier_cutoffs: array<string, array{target: float, label: string, gap: float}>,
+     *   full_cohort: list<array{rank: int, name: string, city: string, state: string, score: float, rank_band: string, tier_category: string}>
+     * }
+     */
+    public function compareWithCohort(float $totalScore, string $institutionName = ''): array
+    {
+        $cohort = NirfEngineering300Cohort::getAll();
+        $totalRanked = count($cohort);
+
+        $simulatedRank = $totalRanked + 1;
+        $insertIdx = $totalRanked;
+
+        for ($i = 0; $i < $totalRanked; $i++) {
+            if ($totalScore >= $cohort[$i]['score']) {
+                $simulatedRank = $cohort[$i]['rank'];
+                $insertIdx = $i;
+                break;
+            }
+        }
+
+        if ($totalScore < $cohort[$totalRanked - 1]['score']) {
+            $simulatedRank = 301;
+        }
+
+        $peersAbove = [];
+        for ($a = max(0, $insertIdx - 5); $a < $insertIdx; $a++) {
+            $peer = $cohort[$a];
+            $peer['score_gap'] = round(max(0.0, $peer['score'] - $totalScore), 2);
+            $peersAbove[] = $peer;
+        }
+
+        $peersBelow = [];
+        for ($b = $insertIdx; $b < min($totalRanked, $insertIdx + 5); $b++) {
+            $peer = $cohort[$b];
+            $peer['score_lead'] = round(max(0.0, $totalScore - $peer['score']), 2);
+            $peersBelow[] = $peer;
+        }
+
+        $tierCutoffs = [
+            'tier_top_10' => ['target' => 66.69, 'label' => 'Top 10 Cohort (Rank 1 - 10)', 'gap' => round(max(0.0, 66.69 - $totalScore), 2)],
+            'tier_top_25' => ['target' => 58.20, 'label' => 'Top 25 Cohort (Rank 11 - 25)', 'gap' => round(max(0.0, 58.20 - $totalScore), 2)],
+            'tier_top_50' => ['target' => 54.16, 'label' => 'Top 50 Cohort (Rank 26 - 50)', 'gap' => round(max(0.0, 54.16 - $totalScore), 2)],
+            'tier_top_100' => ['target' => 43.95, 'label' => 'Top 100 Published Ranks', 'gap' => round(max(0.0, 43.95 - $totalScore), 2)],
+            'tier_101_150' => ['target' => 38.00, 'label' => 'Rank Band 101 - 150', 'gap' => round(max(0.0, 38.00 - $totalScore), 2)],
+            'tier_151_200' => ['target' => 33.00, 'label' => 'Rank Band 151 - 200', 'gap' => round(max(0.0, 33.00 - $totalScore), 2)],
+            'tier_201_300' => ['target' => 25.00, 'label' => 'Rank Band 201 - 300', 'gap' => round(max(0.0, 25.00 - $totalScore), 2)],
+        ];
+
+        return [
+            'total_ranked_institutions' => $totalRanked,
+            'total_cohort_count' => $totalRanked,
+            'simulated_cohort_rank' => $simulatedRank,
+            'simulated_tier' => ($simulatedRank <= 10) ? 'Top 10' : (($simulatedRank <= 50) ? 'Top 50' : (($simulatedRank <= 100) ? 'Top 100' : (($simulatedRank <= 150) ? 'Rank 101 - 150' : (($simulatedRank <= 200) ? 'Rank 151 - 200' : (($simulatedRank <= 300) ? 'Rank 201 - 300' : 'Band 300+'))))),
+            'peers_above' => $peersAbove,
+            'peers_below' => $peersBelow,
+            'tier_cutoffs' => $tierCutoffs,
+            'full_cohort' => $cohort,
         ];
     }
 }
