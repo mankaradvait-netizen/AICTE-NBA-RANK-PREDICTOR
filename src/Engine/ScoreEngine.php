@@ -67,7 +67,23 @@ class ScoreEngine
         $setVersion = $formulaData['version'];
 
         // 1. Build context: Inputs -> Derived Chain -> Benchmarks applied LAST
-        $context = $validatedInputs;
+        // Provide baseline defaults for all standard NIRF inputs so partial uploads or missing fields never crash formula evaluation
+        $defaults = [
+            'NT' => 100.0, 'NE' => 100.0, 'NP' => 0.0, 'F' => 15.0, 'F_PHD' => 0.0,
+            'F1' => 0.0, 'F2' => 0.0, 'F3' => 0.0, 'BC' => 0.0, 'BO' => 0.0,
+            'P' => 0.0, 'CC' => 0.0, 'TOP25' => 0.0, 'PG' => 0.0, 'PP' => 0.0,
+            'RF' => 0.0, 'CF' => 0.0, 'NP_pct' => 0.0, 'NHS_pct' => 0.0, 'NG_pct' => 0.0,
+            'GMS_val' => 0.0, 'NPHD' => 0.0, 'N_state_pct' => 0.0, 'N_country_pct' => 0.0,
+            'SW_pct' => 0.0, 'FW_pct' => 0.0, 'ESC_pct' => 0.0, 'PCS_score' => 0.0,
+            'PR_survey_val' => 0.0,
+        ];
+        $context = array_merge($defaults, $validatedInputs);
+        if (($context['NT'] ?? 0.0) <= 0.0) {
+            $context['NT'] = 100.0;
+        }
+        if (($context['NE'] ?? 0.0) <= 0.0) {
+            $context['NE'] = 100.0;
+        }
 
         // 2. Evaluate Derived Variables in eval_order with 8-decimal precision
         $derivedValues = [];

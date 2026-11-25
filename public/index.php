@@ -12,7 +12,8 @@ if (php_sapi_name() === 'cli-server') {
 
 // Suppress inline HTML warnings leaking into API responses while logging errors
 ini_set('display_errors', '0');
-ini_set('memory_limit', '512M');
+ini_set('memory_limit', '1024M');
+ini_set('max_execution_time', '300');
 error_reporting(E_ALL);
 
 // Register fatal shutdown handler to guarantee JSON response even on fatal crash

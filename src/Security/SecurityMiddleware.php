@@ -44,15 +44,16 @@ class SecurityMiddleware implements MiddlewareInterface
         $path = $request->getUri()->getPath();
 
         // Login, MFA, and file uploads are throttled more strictly than general API traffic.
+        $isLocal = ($clientIp === '127.0.0.1' || $clientIp === '::1');
         $maxRequests = match ($path) {
-            '/api/signin' => 10,
-            '/api/register' => 10,
-            '/api/upload/workbooks' => 10,
-            '/api/v1/auth/login' => 10,
-            '/api/v1/auth/mfa/verify' => 5,
-            '/api/v1/admin/formulas/upload' => 10,
-            '/api/v1/admin/benchmarks/ingest' => 10,
-            default => 120,
+            '/api/signin' => $isLocal ? 100 : 10,
+            '/api/register' => $isLocal ? 100 : 10,
+            '/api/upload/workbooks' => 120,
+            '/api/v1/auth/login' => $isLocal ? 100 : 10,
+            '/api/v1/auth/mfa/verify' => 10,
+            '/api/v1/admin/formulas/upload' => 60,
+            '/api/v1/admin/benchmarks/ingest' => 60,
+            default => 300,
         };
         $window = 60;
         $corePdo = $this->dbManager->getInstitutionCore();

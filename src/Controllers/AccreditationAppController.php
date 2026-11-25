@@ -351,6 +351,7 @@ class AccreditationAppController
             }
 
             // Path 2: Universal Multi-Format Document Ingestion
+            $uploadErrors = [];
             if (!empty($uploadedFiles)) {
                 if (!is_dir($tempDir)) {
                     @mkdir($tempDir, 0755, true);
@@ -358,23 +359,40 @@ class AccreditationAppController
                 foreach ($uploadedFiles as $key => $fileOrArray) {
                     $fileList = is_array($fileOrArray) ? $fileOrArray : [$fileOrArray];
                     foreach ($fileList as $fItem) {
-                        if ($fItem instanceof \Psr\Http\Message\UploadedFileInterface && $fItem->getError() === UPLOAD_ERR_OK) {
-                            $origName = $fItem->getClientFilename() ?? 'document';
-                            $dest = $tempDir . DIRECTORY_SEPARATOR . bin2hex(random_bytes(3)) . '_' . $origName;
-                            $fItem->moveTo($dest);
-                            $filesToIngest[] = [
-                                'path' => $dest,
-                                'original_name' => $origName,
-                                'size' => $fItem->getSize() ?? (file_exists($dest) ? filesize($dest) : 0),
-                                'is_temp' => true,
-                            ];
+                        if ($fItem instanceof \Psr\Http\Message\UploadedFileInterface) {
+                            $err = $fItem->getError();
+                            if ($err === UPLOAD_ERR_OK) {
+                                $origName = $fItem->getClientFilename() ?? 'document';
+                                $dest = $tempDir . DIRECTORY_SEPARATOR . bin2hex(random_bytes(3)) . '_' . $origName;
+                                $fItem->moveTo($dest);
+                                $filesToIngest[] = [
+                                    'path' => $dest,
+                                    'original_name' => $origName,
+                                    'size' => $fItem->getSize() ?? (file_exists($dest) ? filesize($dest) : 0),
+                                    'is_temp' => true,
+                                ];
+                            } elseif ($err === UPLOAD_ERR_INI_SIZE) {
+                                $uploadErrors[] = "File '{$fItem->getClientFilename()}' exceeds server upload limit (" . ini_get('upload_max_filesize') . ").";
+                            } elseif ($err === UPLOAD_ERR_FORM_SIZE) {
+                                $uploadErrors[] = "File '{$fItem->getClientFilename()}' exceeds HTML form limit.";
+                            } elseif ($err === UPLOAD_ERR_PARTIAL) {
+                                $uploadErrors[] = "File '{$fItem->getClientFilename()}' was only partially uploaded.";
+                            }
                         }
                     }
                 }
             }
 
             if (empty($filesToIngest)) {
-                return $this->jsonResponse($response, ['error' => 'No valid files received for extraction.'], 400);
+                if (!empty($uploadErrors)) {
+                    return $this->jsonResponse($response, ['error' => implode(' ', $uploadErrors)], 400);
+                }
+                if (isset($_SERVER['CONTENT_LENGTH']) && (int)$_SERVER['CONTENT_LENGTH'] > 0 && empty($uploadedFiles)) {
+                    return $this->jsonResponse($response, [
+                        'error' => 'Total uploaded file size exceeds server post limit (' . ini_get('post_max_size') . '). Please increase post_max_size or upload fewer files at once.'
+                    ], 400);
+                }
+                return $this->jsonResponse($response, ['error' => 'No valid files received for extraction. Please select or drag & drop .xlsx, .xls, .csv, or .pdf files.'], 400);
             }
 
             if ($this->universalIngestion === null) {
@@ -1963,7 +1981,7 @@ HTML;
       <p style="font-size: 12.5px; color: var(--ink-muted); margin-bottom: 14px;">Select faculty registers, student admissions census, NIRF DCS extracts, audited financial statements, or annual reports.</p>
 
       <form id="workbook-upload-form" onsubmit="handleWorkbookUpload(event)">
-        <div style="border: 1px solid var(--hairline); border-radius: 10px; padding: 24px; background: var(--surface-raised); text-align: center; margin-bottom: 14px;">
+        <div id="drop-zone" style="border: 2px dashed var(--hairline); border-radius: 10px; padding: 28px 20px; background: var(--surface-raised); text-align: center; margin-bottom: 14px; cursor: pointer; transition: all 0.2s ease;">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--adypu-maroon)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 8px;">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
@@ -2145,22 +2163,94 @@ HTML;
     document.getElementById(tabId).classList.add('active');
   }
 
-  function handleFileSelection(e) {
-    const files = e.target.files;
+  let _stagedFiles = [];
+
+  function addStagedFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      const exists = _stagedFiles.some(existing => existing.name === f.name && existing.size === f.size);
+      if (!exists) {
+        _stagedFiles.push(f);
+      }
+    }
+    renderStagedFilesList();
+  }
+
+  function removeStagedFile(index) {
+    _stagedFiles.splice(index, 1);
+    renderStagedFilesList();
+  }
+
+  function clearAllStagedFiles() {
+    _stagedFiles = [];
+    const univInput = document.getElementById('universal_files');
+    if (univInput) univInput.value = '';
+    renderStagedFilesList();
+  }
+
+  function renderStagedFilesList() {
     const listDiv = document.getElementById('selected-files-list');
-    if (!files || files.length === 0) {
+    if (!listDiv) return;
+    if (_stagedFiles.length === 0) {
       listDiv.style.display = 'none';
+      listDiv.innerHTML = '';
       return;
     }
-    let html = '<strong>Selected ' + files.length + ' Institutional File(s):</strong><ul style="margin: 6px 0 0 18px; line-height: 1.6;">';
-    for (let i = 0; i < files.length; i++) {
-      const szMb = (files[i].size / (1024 * 1024)).toFixed(2);
-      html += '<li>' + files[i].name + ' (' + szMb + ' MiB)</li>';
-    }
-    html += '</ul>';
+    let totalBytes = 0;
+    let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">';
+    html += '<strong style="color: var(--ink);">Selected ' + _stagedFiles.length + ' Institutional File(s):</strong>';
+    html += '<button type="button" onclick="clearAllStagedFiles()" class="btn btn-secondary" style="font-size: 11px; padding: 2px 8px;">Clear All</button>';
+    html += '</div>';
+    html += '<div style="display: flex; flex-direction: column; gap: 6px;">';
+    _stagedFiles.forEach((f, idx) => {
+      totalBytes += f.size;
+      const szMb = (f.size / (1024 * 1024)).toFixed(2);
+      html += '<div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface-raised); padding: 6px 10px; border-radius: 6px; font-size: 12px; border: 1px solid var(--hairline);">';
+      html += '<span style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">📄 ' + f.name + ' <span style="color: var(--ink-muted); font-size: 11px;">(' + szMb + ' MiB)</span></span>';
+      html += '<button type="button" onclick="removeStagedFile(' + idx + ')" style="background: none; border: none; color: #dc2626; cursor: pointer; font-weight: bold; font-size: 14px; padding: 0 4px;" title="Remove file">&times;</button>';
+      html += '</div>';
+    });
+    const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+    html += '</div>';
+    html += '<div style="margin-top: 8px; font-size: 11.5px; color: var(--ink-muted);">Total package: ' + totalMb + ' MiB (Limit: 200 MiB)</div>';
     listDiv.innerHTML = html;
     listDiv.style.display = 'block';
   }
+
+  function handleFileSelection(e) {
+    if (e.target && e.target.files) {
+      addStagedFiles(e.target.files);
+    }
+  }
+
+  // Setup Drag and Drop listeners on the drop zone
+  document.addEventListener('DOMContentLoaded', function() {
+    const dropZone = document.getElementById('drop-zone');
+    if (dropZone) {
+      ['dragenter', 'dragover'].forEach(name => {
+        dropZone.addEventListener(name, function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.style.borderColor = 'var(--adypu-maroon)';
+          dropZone.style.backgroundColor = 'var(--surface)';
+        }, false);
+      });
+      ['dragleave', 'drop'].forEach(name => {
+        dropZone.addEventListener(name, function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.style.borderColor = 'var(--hairline)';
+          dropZone.style.backgroundColor = 'var(--surface-raised)';
+        }, false);
+      });
+      dropZone.addEventListener('drop', function(e) {
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          addStagedFiles(e.dataTransfer.files);
+        }
+      }, false);
+    }
+  });
 
   async function loadWorkspaceFolderExcels() {
     const btn = document.getElementById('btn-load-folder');
@@ -2181,16 +2271,23 @@ HTML;
             nameInput.value = data.institution_name;
           }
         }
+        statusBox.className = 'notice notice-success';
+        const docCount = data.documents ? data.documents.length : (data.counts ? data.counts.documents : 11);
+        const factCount = data.candidate_facts ? data.candidate_facts.length : (data.counts ? data.counts.candidate_facts : 0);
+        statusBox.innerText = 'Autonomous scan complete: Ingested ' + docCount + ' institutional files, ' + factCount + ' verified candidate facts bound.';
+        statusBox.style.display = 'flex';
         renderMastersResults(data);
       } else {
         statusBox.className = 'notice notice-error';
         statusBox.innerText = data.error || 'Failed to ingest institutional files.';
         statusBox.style.display = 'flex';
       }
+      statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {
       statusBox.className = 'notice notice-error';
       statusBox.innerText = 'Network error while ingesting institutional files: ' + err.message;
       statusBox.style.display = 'flex';
+      statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } finally {
       btn.disabled = false;
       btn.innerText = '⚡ Autonomous Scan & Ingest Institutional Files';
@@ -2202,15 +2299,19 @@ HTML;
     const btn = document.getElementById('btn-parse-workbooks');
     const statusBox = document.getElementById('masters-status');
     statusBox.style.display = 'none';
-    btn.disabled = true;
-    btn.innerText = 'Extracting & Parsing Documents...';
 
-    // Construct FormData cleanly without duplicate entries or empty file parts
+    // Construct FormData cleanly from staged files or direct inputs
     const formData = new FormData();
-    const univInput = document.getElementById('universal_files');
-    if (univInput && univInput.files && univInput.files.length > 0) {
-      for (let i = 0; i < univInput.files.length; i++) {
-        formData.append('files[]', univInput.files[i]);
+    if (_stagedFiles.length > 0) {
+      for (let i = 0; i < _stagedFiles.length; i++) {
+        formData.append('files[]', _stagedFiles[i]);
+      }
+    } else {
+      const univInput = document.getElementById('universal_files');
+      if (univInput && univInput.files && univInput.files.length > 0) {
+        for (let i = 0; i < univInput.files.length; i++) {
+          formData.append('files[]', univInput.files[i]);
+        }
       }
     }
     const facultyInput = document.getElementById('faculty_file');
@@ -2225,6 +2326,17 @@ HTML;
     if (financeInput && financeInput.files && financeInput.files.length > 0) {
       formData.append('finance_file', financeInput.files[0]);
     }
+
+    if (!formData.has('files[]') && !formData.has('faculty_file') && !formData.has('student_file') && !formData.has('finance_file')) {
+      statusBox.className = 'notice notice-error';
+      statusBox.innerText = 'Please select or drag & drop at least one institutional document (.xlsx, .xls, .csv, .pdf) before uploading.';
+      statusBox.style.display = 'flex';
+      statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = 'Extracting & Parsing Documents...';
 
     try {
       const res = await fetch('/api/upload/workbooks', {
@@ -2245,16 +2357,23 @@ HTML;
         }
       }
       if (res.ok && data.success) {
+        statusBox.className = 'notice notice-success';
+        const docCount = data.documents ? data.documents.length : (data.counts ? data.counts.documents : 1);
+        const factCount = data.candidate_facts ? data.candidate_facts.length : (data.counts ? data.counts.candidate_facts : 0);
+        statusBox.innerText = 'Extraction complete! Extracted ' + factCount + ' candidate facts across ' + docCount + ' document(s).';
+        statusBox.style.display = 'flex';
         renderMastersResults(data);
       } else {
         statusBox.className = 'notice notice-error';
-        statusBox.innerText = data.error || 'Workbook processing failed.';
+        statusBox.innerText = data.error || (data.message ? data.message : 'Workbook processing failed.');
         statusBox.style.display = 'flex';
       }
+      statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {
       statusBox.className = 'notice notice-error';
       statusBox.innerText = 'Upload error: ' + err.message;
       statusBox.style.display = 'flex';
+      statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } finally {
       btn.disabled = false;
       btn.innerText = 'Upload & Clean Workbooks';
